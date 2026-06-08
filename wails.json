@@ -1,0 +1,15 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Skills Manager",
+  "outputfilename": "skillsmanager",
+  "author": {
+    "name": "Skills Manager Team",
+    "email": "team@example.com"
+  },
+  "info": {
+    "companyName": "Skills Manager",
+    "productName": "Skills Manager",
+    "copyright": "Copyright (c) 2025",
+    "version": "0.1.0"
+  }
+}
