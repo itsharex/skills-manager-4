@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skillsmanager/skillsmanager/backend/internal/agent"
+	"github.com/skillsmanager/skillsmanager/backend/internal/clawhub"
 	"github.com/skillsmanager/skillsmanager/backend/internal/registry"
 	"github.com/skillsmanager/skillsmanager/backend/internal/skill"
 	"github.com/skillsmanager/skillsmanager/backend/internal/storage"
@@ -22,11 +23,17 @@ type Installer struct {
 	store    *storage.Storage
 	reg      *registry.Registry
 	agentMgr *agent.Manager
+	clawhub  *clawhub.Manager
 }
 
 // New 创建 Installer
 func New(store *storage.Storage, reg *registry.Registry, agentMgr *agent.Manager) *Installer {
-	return &Installer{store: store, reg: reg, agentMgr: agentMgr}
+	return &Installer{
+		store:    store,
+		reg:      reg,
+		agentMgr: agentMgr,
+		clawhub:  clawhub.New(store.Root()),
+	}
 }
 
 // InstallOptions 安装选项
@@ -172,6 +179,18 @@ func (i *Installer) installOne(skillPath string, info *models.SkillInfo, opts In
 	}
 
 	for _, agentID := range opts.AgentIDs {
+		// 检查该 Agent 是否支持当前安装范围
+		if ag, ok := i.agentMgr.Get(agentID); ok {
+			if opts.Scope == "project" && !ag.SupportsProject {
+				link := InstallLink{
+					AgentID: agentID,
+					Success: false,
+					Error:   fmt.Sprintf("agent %q 不支持项目级安装（仅支持全局）", agentID),
+				}
+				result.Agents[agentID] = link
+				continue
+			}
+		}
 		linkPath, err := i.agentMgr.InstallToAgent(skillName, targetDir, agentID, opts.Scope, opts.ProjectDir)
 		link := InstallLink{AgentID: agentID, Path: linkPath, Success: err == nil}
 		if err != nil {
@@ -187,6 +206,22 @@ func (i *Installer) installOne(skillPath string, info *models.SkillInfo, opts In
 func (i *Installer) resolveSource(opts InstallOptions) (models.SourceType, string, func(), error) {
 	// 尝试判断来源类型
 	switch {
+	case looksLikeClawHub(opts.Source):
+		// clawhub:owner/slug 或 https://clawhub.ai/owner/slug
+		owner, slug := parseClawHubRef(opts.Source)
+		if owner == "" || slug == "" {
+			return "", "", nil, fmt.Errorf("invalid clawhub ref: %s", opts.Source)
+		}
+		// 只负责下载到临时目录（包含 SKILL.md）
+		// 后续 installOne 统一处理解析 + skillspool 版本目录 + 注册 + Agent 分发
+		tmpDir, err := i.clawhub.FetchSkill(owner, slug)
+		if err != nil {
+			return "", "", nil, err
+		}
+		// 注意：临时目录留由进程结束后由系统清理（或用户手动清理 .cache/clawhub）
+		// 这里返回 nil cleanup，因为内容可能作为 clawhub 的本地缓存继续复用
+		return models.SourceClawhub, tmpDir, nil, nil
+
 	case looksLikeGitHub(opts.Source):
 		// 克隆到临时目录
 		tmp, err := os.MkdirTemp("", "skills-")
@@ -259,6 +294,48 @@ func looksLikeNpx(s string) bool {
 	return strings.HasPrefix(s, "npx ") || strings.HasPrefix(s, "npm ")
 }
 
+// looksLikeClawHub 检查输入是否是 clawhub 风格的引用。
+// 支持：
+//   - "clawhub:owner/slug"
+//   - "https://clawhub.ai/owner/slug"
+//   - "clawhub.ai/owner/slug"
+func looksLikeClawHub(s string) bool {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "clawhub:") {
+		return true
+	}
+	if strings.HasPrefix(s, "https://clawhub.ai/") || strings.HasPrefix(s, "http://clawhub.ai/") {
+		return true
+	}
+	if strings.HasPrefix(s, "clawhub.ai/") {
+		return true
+	}
+	return false
+}
+
+// parseClawHubRef 从 clawhub 引用中提取 owner/slug。
+func parseClawHubRef(s string) (owner, slug string) {
+	s = strings.TrimSpace(s)
+	switch {
+	case strings.HasPrefix(s, "clawhub:"):
+		s = strings.TrimPrefix(s, "clawhub:")
+	case strings.HasPrefix(s, "https://clawhub.ai/"):
+		s = strings.TrimPrefix(s, "https://clawhub.ai/")
+	case strings.HasPrefix(s, "http://clawhub.ai/"):
+		s = strings.TrimPrefix(s, "http://clawhub.ai/")
+	case strings.HasPrefix(s, "clawhub.ai/"):
+		s = strings.TrimPrefix(s, "clawhub.ai/")
+	default:
+		return "", ""
+	}
+	// s 现在可能是 owner/slug 或 owner/slug/path/extra
+	parts := strings.Split(strings.Trim(s, "/"), "/")
+	if len(parts) >= 2 {
+		return parts[0], parts[1]
+	}
+	return "", ""
+}
+
 func expandPath(p string) string {
 	p = os.ExpandEnv(p)
 	if len(p) > 0 && p[0] == '~' {
@@ -267,6 +344,131 @@ func expandPath(p string) string {
 		}
 	}
 	return p
+}
+
+// --- 项目技能迁移到全局技能库 ---
+
+// MigrateProjectSkill 将项目目录中的技能复制到 skillspool（不走 Git 等流程，纯复制）
+// skillPath 是项目中技能的绝对路径（该目录下应有 SKILL.md）
+// agentIDs 是同步安装到的 Agent 列表
+// 返回 skillspool 中的目标路径
+func (i *Installer) MigrateProjectSkill(skillPath string, agentIDs []string) (string, error) {
+	// 1. 检查目录存在且有 SKILL.md
+	skillFilePath := filepath.Join(skillPath, "SKILL.md")
+	if _, err := os.Stat(skillFilePath); err != nil {
+		return "", fmt.Errorf("no SKILL.md found in %s: %w", skillPath, err)
+	}
+
+	// 2. 解析 SKILL.md
+	info, err := skill.ParseSkillFile(skillFilePath)
+	if err != nil {
+		return "", fmt.Errorf("parse SKILL.md: %w", err)
+	}
+	if info.Name == "" {
+		info.Name = filepath.Base(skillPath)
+	}
+	if info.Version == "" {
+		info.Version = "1.0.0"
+	}
+
+	// 3. 确保目标版本目录存在并复制
+	versionStr := info.Version
+	targetDir, err := i.store.EnsureVersionDir(info.Name, versionStr)
+	if err != nil {
+		return "", fmt.Errorf("ensure version dir: %w", err)
+	}
+
+	if err := copyDirContents(skillPath, targetDir); err != nil {
+		return "", fmt.Errorf("copy project skill to library: %w", err)
+	}
+
+	// 4. 更新 latest
+	versions, _ := i.store.ListVersions(info.Name)
+	latest := version.Latest(versions)
+	if latest != "" {
+		_ = i.store.UpdateLatest(info.Name, latest)
+	}
+
+	// 5. 更新注册表
+	source := models.Source{
+		Type: models.SourceLocal,
+		Path: skillPath,
+	}
+	relPath := strings.TrimPrefix(targetDir, i.store.Root())
+	relPath = strings.Trim(relPath, string(os.PathSeparator))
+	i.reg.AddSkill(info.Name, info, source, versionStr, relPath, agentIDs)
+	if err := i.reg.Save(); err != nil {
+		return "", fmt.Errorf("save registry: %w", err)
+	}
+
+	// 6. 同步分发到指定 Agent（全局目录）
+	for _, agentID := range agentIDs {
+		if _, err := i.agentMgr.InstallToAgent(info.Name, targetDir, agentID, "global", ""); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: install to agent %s: %v\n", agentID, err)
+		}
+	}
+
+	return targetDir, nil
+}
+
+// UninstallSkillFromAgent 从单个 Agent 卸载技能（从全局目录移除并更新注册表）
+func (i *Installer) UninstallSkillFromAgent(skillName, agentID string) error {
+	// 从 Agent 目录移除
+	if err := i.agentMgr.RemoveFromAgent(skillName, agentID, "global", ""); err != nil {
+		return err
+	}
+	// 更新注册表
+	skill, ok := i.reg.Get(skillName)
+	if !ok {
+		return nil
+	}
+	for ver, v := range skill.Versions {
+		filtered := make([]string, 0, len(v.Agents))
+		for _, a := range v.Agents {
+			if a != agentID {
+				filtered = append(filtered, a)
+			}
+		}
+		if len(filtered) != len(v.Agents) {
+			v.Agents = filtered
+			skill.Versions[ver] = v
+		}
+	}
+	return i.reg.Save()
+}
+
+// InstallSkillToAgent 将已存在于 skillspool 的技能安装到指定 Agent
+// 使用 latest 版本
+func (i *Installer) InstallSkillToAgent(skillName, agentID string) (string, error) {
+	skill, ok := i.reg.Get(skillName)
+	if !ok {
+		return "", fmt.Errorf("skill %q not found in registry", skillName)
+	}
+	versionStr := skill.LatestVersion
+	if versionStr == "" {
+		// 回退到第一个版本
+		for v := range skill.Versions {
+			versionStr = v
+			break
+		}
+	}
+	if versionStr == "" {
+		return "", fmt.Errorf("skill %q has no version", skillName)
+	}
+
+	targetDir := i.store.VersionPath(skillName, versionStr)
+	if _, err := os.Stat(targetDir); err != nil {
+		return "", fmt.Errorf("version dir not found: %s: %w", targetDir, err)
+	}
+
+	path, err := i.agentMgr.InstallToAgent(skillName, targetDir, agentID, "global", "")
+	if err != nil {
+		return "", err
+	}
+
+	// 更新注册表
+	i.reg.AddAgentToVersion(skillName, versionStr, agentID)
+	return path, nil
 }
 
 // copyDirContents 复制目录内容（不复制自身）

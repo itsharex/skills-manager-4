@@ -3,9 +3,8 @@ package agent
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/skillsmanager/skillsmanager/backend/pkg/models"
@@ -43,7 +42,7 @@ func (m *Manager) ListDetected() []string {
 	return ids
 }
 
-// InstallToAgent 为指定 Agent 安装技能（创建软连接）
+// InstallToAgent 为指定 Agent 安装技能（目录复制，不使用软链接以避免临时数据污染）
 // target 是 skillspool 中技能版本目录的绝对路径
 // agentID 是 Agent ID
 // scope 是安装范围: "global" 或 "project"
@@ -70,13 +69,12 @@ func (m *Manager) InstallToAgent(skillName string, target string, agentID string
 		return "", fmt.Errorf("create agent skill dir: %w", err)
 	}
 
-	// 创建软连接（或降级）
-	linkPath := filepath.Join(installDir, sanitize(skillName))
-	err := createLink(target, linkPath)
-	if err != nil {
-		return "", fmt.Errorf("create link for agent %q: %w", agentID, err)
+	// 目录复制（不使用软链接，避免临时数据污染 skillspool）
+	destPath := filepath.Join(installDir, sanitize(skillName))
+	if err := copyDir(target, destPath); err != nil {
+		return "", fmt.Errorf("copy skill to agent %q: %w", agentID, err)
 	}
-	return linkPath, nil
+	return destPath, nil
 }
 
 // RemoveFromAgent 从指定 Agent 移除技能
@@ -97,58 +95,63 @@ func (m *Manager) RemoveFromAgent(skillName string, agentID string, scope string
 		installDir = expandPath(agent.GlobalLocation)
 	}
 
-	linkPath := filepath.Join(installDir, sanitize(skillName))
-	if _, err := os.Lstat(linkPath); err == nil {
-		return os.RemoveAll(linkPath)
+	targetPath := filepath.Join(installDir, sanitize(skillName))
+	if _, err := os.Lstat(targetPath); err == nil {
+		return os.RemoveAll(targetPath)
 	}
 	return nil
 }
 
-// --- 内部: 软连接创建（含降级策略）---
-
-// createLink 尝试以多种方式将 target 链接到 linkPath
-// 优先级: symlink → junction (Windows) → 目录复制
-func createLink(target, linkPath string) error {
-	// 清理旧链接
-	if info, err := os.Lstat(linkPath); err == nil {
-		// 检查是否已经是正确的链接
-		if info.Mode()&os.ModeSymlink != 0 {
-			if existingTarget, err := os.Readlink(linkPath); err == nil {
-				if existingTarget == target {
-					return nil
-				}
-			}
-		}
-		if err := os.RemoveAll(linkPath); err != nil {
-			return fmt.Errorf("remove existing: %w", err)
-		}
-	}
-
-	// 尝试 1: symlink
-	if err := os.Symlink(target, linkPath); err == nil {
+// ScanAgentSkills 扫描指定 Agent 的全局目录，返回已安装的技能名列表
+func (m *Manager) ScanAgentSkills(agentID string) []string {
+	agent, ok := m.agents[agentID]
+	if !ok {
 		return nil
 	}
-
-	// Windows 降级策略
-	if runtime.GOOS == "windows" {
-		// 尝试 2: junction (通过 cmd /c mklink /J)
-		if tryJunction(target, linkPath) {
-			return nil
+	skillDir := expandPath(agent.GlobalLocation)
+	entries, err := os.ReadDir(skillDir)
+	if err != nil {
+		return nil
+	}
+	var result []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// 检查是否包含 SKILL.md 以确认为技能目录
+		if _, err := os.Stat(filepath.Join(skillDir, e.Name(), "SKILL.md")); err == nil {
+			result = append(result, e.Name())
 		}
 	}
-
-	// 最后降级: 目录复制
-	return copyDir(target, linkPath)
+	sort.Strings(result)
+	return result
 }
 
-func tryJunction(target, linkPath string) bool {
-	// 简化: 直接尝试 os.Symlink 在 Windows 上有时需要管理员权限
-	// 通过 cmd /c mklink /D 尝试目录软链接
-	cmd := exec.Command("cmd", "/c", "mklink", "/D", linkPath, target)
-	return cmd.Run() == nil
+// IsSkillInstalled 检查指定技能是否已安装到 Agent（全局目录）
+func (m *Manager) IsSkillInstalled(agentID, skillName string) bool {
+	agent, ok := m.agents[agentID]
+	if !ok {
+		return false
+	}
+	skillDir := expandPath(agent.GlobalLocation)
+	target := filepath.Join(skillDir, sanitize(skillName))
+	info, err := os.Stat(target)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
+// --- 内部: 目录复制（不使用软链接）---
+
+// copyDir 递归复制目录，不使用软链接，确保项目中不会污染 skillspool
 func copyDir(src, dst string) error {
+	// 清理旧目录
+	if _, err := os.Lstat(dst); err == nil {
+		if err := os.RemoveAll(dst); err != nil {
+			return fmt.Errorf("remove existing target: %w", err)
+		}
+	}
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
