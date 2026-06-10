@@ -437,6 +437,31 @@ body {
   gap: 20px;
 }
 
+.form-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.path-input {
+  display: flex;
+  flex-direction: column;
+}
+.path-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.path-input-row .form-input {
+  flex: 1;
+  min-width: 0;
+}
+.path-input-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* Buttons */
 .btn {
   padding: 12px 24px;

@@ -89,6 +89,9 @@ export namespace models {
 	    global_location: string;
 	    installed: boolean;
 	    detected: boolean;
+	    supports_project: boolean;
+	    global_directory_key: string;
+	    project_directory_key: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Agent(source);
@@ -101,6 +104,9 @@ export namespace models {
 	        this.global_location = source["global_location"];
 	        this.installed = source["installed"];
 	        this.detected = source["detected"];
+	        this.supports_project = source["supports_project"];
+	        this.global_directory_key = source["global_directory_key"];
+	        this.project_directory_key = source["project_directory_key"];
 	    }
 	}
 	export class AgentInstall {
@@ -357,6 +363,36 @@ export namespace models {
 		    }
 		    return a;
 		}
+	}
+	export class ClawHubSkill {
+	    owner: string;
+	    slug: string;
+	    name: string;
+	    description: string;
+	    version?: string;
+	    author?: string;
+	    tags?: string[];
+	    downloads?: number;
+	    stars?: number;
+	    updatedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ClawHubSkill(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner = source["owner"];
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.version = source["version"];
+	        this.author = source["author"];
+	        this.tags = source["tags"];
+	        this.downloads = source["downloads"];
+	        this.stars = source["stars"];
+	        this.updatedAt = source["updatedAt"];
+	    }
 	}
 	
 	export class CleanResult {
@@ -681,6 +717,10 @@ export namespace models {
 	    path: string;
 	    isSymlink: boolean;
 	    symlinkTarget?: string;
+	    inLibrary: boolean;
+	    version?: string;
+	    tags?: string[];
+	    sizeBytes?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectSkill(source);
@@ -693,6 +733,40 @@ export namespace models {
 	        this.path = source["path"];
 	        this.isSymlink = source["isSymlink"];
 	        this.symlinkTarget = source["symlinkTarget"];
+	        this.inLibrary = source["inLibrary"];
+	        this.version = source["version"];
+	        this.tags = source["tags"];
+	        this.sizeBytes = source["sizeBytes"];
+	    }
+	}
+	export class RuntimeStatus {
+	    nodeInstalled: boolean;
+	    nodeVersion?: string;
+	    nodePath?: string;
+	    clawhubInstalled: boolean;
+	    clawhubVersion?: string;
+	    clawhubPath?: string;
+	    hasNpm: boolean;
+	    message?: string;
+	    registryReachable?: boolean;
+	    registryName?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RuntimeStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.nodeInstalled = source["nodeInstalled"];
+	        this.nodeVersion = source["nodeVersion"];
+	        this.nodePath = source["nodePath"];
+	        this.clawhubInstalled = source["clawhubInstalled"];
+	        this.clawhubVersion = source["clawhubVersion"];
+	        this.clawhubPath = source["clawhubPath"];
+	        this.hasNpm = source["hasNpm"];
+	        this.message = source["message"];
+	        this.registryReachable = source["registryReachable"];
+	        this.registryName = source["registryName"];
 	    }
 	}
 	export class ScanMarketResult {
@@ -775,6 +849,7 @@ export namespace models {
 	    source: Source;
 	    versions: Record<string, SkillVersion>;
 	    latest_version: string;
+	    user_tags?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Skill(source);
@@ -787,6 +862,7 @@ export namespace models {
 	        this.source = this.convertValues(source["source"], Source);
 	        this.versions = this.convertValues(source["versions"], SkillVersion, true);
 	        this.latest_version = source["latest_version"];
+	        this.user_tags = source["user_tags"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -895,9 +971,89 @@ export namespace models {
 		}
 	}
 	
+	export class SkillWithStatus {
+	    name: string;
+	    description: string;
+	    tags?: string[];
+	    latestVersion: string;
+	    installStatus: string;
+	    installedAgents: string[];
+	    totalAgents: number;
+	    source: Source;
+	    sizeBytes?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SkillWithStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.tags = source["tags"];
+	        this.latestVersion = source["latestVersion"];
+	        this.installStatus = source["installStatus"];
+	        this.installedAgents = source["installedAgents"];
+	        this.totalAgents = source["totalAgents"];
+	        this.source = this.convertValues(source["source"], Source);
+	        this.sizeBytes = source["sizeBytes"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class SkillspoolMigrationResult {
+	    success: boolean;
+	    old_root: string;
+	    new_root: string;
+	    moved_files: number;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SkillspoolMigrationResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.old_root = source["old_root"];
+	        this.new_root = source["new_root"];
+	        this.moved_files = source["moved_files"];
+	        this.message = source["message"];
+	    }
+	}
 	
 	
+	export class TagUsage {
+	    tag: string;
+	    count: number;
 	
+	    static createFrom(source: any = {}) {
+	        return new TagUsage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tag = source["tag"];
+	        this.count = source["count"];
+	    }
+	}
 	export class UsageDashboard {
 	    totalSkills: number;
 	    totalInstallations: number;

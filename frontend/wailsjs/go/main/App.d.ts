@@ -3,6 +3,8 @@
 import {models} from '../models';
 import {api} from '../models';
 
+export function AddSkillTag(arg1:string,arg2:string):Promise<boolean>;
+
 export function BatchClean(arg1:models.BatchCleanCriteria):Promise<models.BatchCleanResult>;
 
 export function BatchSyncSkills(arg1:models.BatchSyncRequest):Promise<models.BatchSyncResult>;
@@ -15,9 +17,13 @@ export function CleanOrphanedSymlinks(arg1:string):Promise<number>;
 
 export function DeleteSkillVersion(arg1:string,arg2:string):Promise<void>;
 
+export function EnsureRuntime():Promise<models.RuntimeStatus>;
+
 export function FixBrokenSymlinks(arg1:string):Promise<number>;
 
 export function GetAgentStats(arg1:string):Promise<models.AgentStats>;
+
+export function GetAllTags():Promise<Array<models.TagUsage>>;
 
 export function GetConfig():Promise<models.Config>;
 
@@ -25,9 +31,17 @@ export function GetMarketConfig():Promise<models.SkillMarketConfig>;
 
 export function GetSkillStats(arg1:string):Promise<models.SkillStats>;
 
+export function GetSkillTags(arg1:string):Promise<Array<string>>;
+
+export function GetSkillspoolRoot():Promise<string>;
+
 export function GetUsageDashboard():Promise<models.UsageDashboard>;
 
 export function Install(arg1:api.InstallRequest):Promise<Array<api.InstallResult>>;
+
+export function InstallFromClawHub(arg1:string,arg2:string,arg3:Array<string>):Promise<api.InstallResult>;
+
+export function InstallSkillToAgent(arg1:string,arg2:string):Promise<boolean>;
 
 export function ListAgents():Promise<Record<string, models.Agent>>;
 
@@ -39,16 +53,32 @@ export function ListSkillVersions(arg1:string):Promise<Array<models.VersionInfo>
 
 export function ListSkills():Promise<Array<models.Skill>>;
 
+export function ListSkillsWithStatus():Promise<Array<models.SkillWithStatus>>;
+
 export function MigrateProjectSkillToLibrary(arg1:string,arg2:string):Promise<models.MigrateResult>;
+
+export function RemoveSkillTag(arg1:string,arg2:string):Promise<boolean>;
+
+export function RuntimeStatus():Promise<models.RuntimeStatus>;
 
 export function ScanMarket():Promise<models.ScanMarketResult>;
 
 export function ScanProjectSkills(arg1:string):Promise<Array<models.ProjectSkill>>;
 
+export function SearchClawHub(arg1:string):Promise<Array<models.ClawHubSkill>>;
+
+export function SelectDirectory(arg1:string):Promise<string>;
+
+export function SelectFile(arg1:string):Promise<string>;
+
 export function SetMarketConfig(arg1:models.SkillMarketConfig):Promise<void>;
+
+export function SetSkillspoolRoot(arg1:string):Promise<models.SkillspoolMigrationResult>;
 
 export function SkillspoolRoot():Promise<string>;
 
 export function SwitchSkillVersion(arg1:string,arg2:string):Promise<void>;
 
 export function UninstallFromProject(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function UninstallSkillFromAgent(arg1:string,arg2:string):Promise<boolean>;
