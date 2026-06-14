@@ -2,6 +2,10 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "Skills Manager",
   "outputfilename": "skillsmanager",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
   "author": {
     "name": "Skills Manager Team",
     "email": "team@example.com"
@@ -10,6 +14,6 @@
     "companyName": "Skills Manager",
     "productName": "Skills Manager",
     "copyright": "Copyright (c) 2025",
-    "version": "0.1.0"
+    "version": "0.2.5"
   }
 }

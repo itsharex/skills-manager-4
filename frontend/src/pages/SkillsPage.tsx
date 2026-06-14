@@ -1,713 +1,483 @@
-import { useState, useMemo, useEffect } from "react";
-import type { SkillWithStatus, ProjectSkill, Agent, TagUsage } from "../types";
-import {
-  listSkillsWithStatus,
-  getAllTags,
-  scanProjectSkills,
-  migrateProjectSkillToLibrary,
-  addSkillTag,
-  removeSkillTag,
-  installSkillToAgent,
-  uninstallSkillFromAgent,
-} from "../bridge";
-
-// 状态过滤选项
-type StatusFilter = "all" | "installed" | "partially_installed" | "not_installed";
+import { useState, useEffect } from "react";
+import { RefreshCw, Search, Loader2, Puzzle, CheckCircle2, FolderOpen, Download, Archive, CheckSquare, Square } from "lucide-react";
+import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { scanLocal, listPool, getConfig, importToPool, archiveToPool, openDirectoryDialog } from "../bridge";
+import type { ListedSkill, DiscoveredSkill } from "../types";
 
 interface Props {
-  agents: Record<string, Agent>;
+  skills: ListedSkill[];
+  onSelect: (skill: ListedSkill) => void;
   onRefresh: () => void;
 }
 
-export default function SkillsPage({ agents, onRefresh }: Props) {
-  // ====== 全局技能库 ======
-  const [skills, setSkills] = useState<SkillWithStatus[]>([]);
-  const [tags, setTags] = useState<TagUsage[]>([]);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [tagFilter, setTagFilter] = useState<string>("");
-  const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(true);
+export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
+  // Pool state
+  const [poolSkills, setPoolSkills] = useState<DiscoveredSkill[]>([]);
+  const [poolPath, setPoolPath] = useState("");
+  const [loadingPool, setLoadingPool] = useState(true);
 
-  // ====== 项目技能 ======
-  const [projectPath, setProjectPath] = useState<string>(
-    localStorage.getItem("skills_project_path") || ""
-  );
-  const [projectSkills, setProjectSkills] = useState<ProjectSkill[]>([]);
-  const [projectLoading, setProjectLoading] = useState(false);
-  const [projectMsg, setProjectMsg] = useState<string>("");
+  // Scan state
+  const [projectPath, setProjectPath] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [scanResults, setScanResults] = useState<DiscoveredSkill[]>([]);
+  const [scanError, setScanError] = useState<string | null>(null);
 
-  // ====== 通用 UI 状态 ======
-  const [editingTagSkill, setEditingTagSkill] = useState<string | null>(null);
-  const [tagInput, setTagInput] = useState("");
-  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  // Action state
+  const [importing, setImporting] = useState(false);
+  const [actionMsg, setActionMsg] = useState<{ skill: string; success: boolean; msg: string } | null>(null);
 
-  // 加载全局技能库
-  const loadGlobal = async () => {
-    setLoading(true);
-    try {
-      const [s, t] = await Promise.all([listSkillsWithStatus(), getAllTags()]);
-      // 防御性：确保返回的是数组，避免 undefined 导致白屏
-      setSkills(Array.isArray(s) ? s : []);
-      setTags(Array.isArray(t) ? t : []);
-    } catch (err) {
-      console.error("loadGlobal", err);
-      // 出错时也设置为空数组，防止白屏
-      setSkills([]);
-      setTags([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Multi-select state for "not in pool" skills
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+
+  const inPoolSkills = skills.filter(s => s.inPool);
+  const notInPoolSkills = skills.filter(s => !s.inPool);
 
   useEffect(() => {
-    loadGlobal();
+    async function load() {
+      try {
+        const cfg = await getConfig();
+        setPoolPath(cfg.pool_path || "");
+        if (cfg.pool_path) {
+          const pool = await listPool();
+          setPoolSkills(pool);
+        }
+      } catch { /* ignore */ }
+      finally { setLoadingPool(false); }
+    }
+    load();
   }, []);
 
-  // 过滤
-  const filteredSkills = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return skills.filter((s) => {
-      if (statusFilter !== "all" && s.installStatus !== statusFilter) return false;
-      if (tagFilter && !(s.tags || []).includes(tagFilter)) return false;
-      if (q) {
-        const hay = `${s.name} ${s.description} ${(s.tags || []).join(" ")}`.toLowerCase();
-        if (!hay.includes(q)) return false;
+  const reloadPool = async () => {
+    try {
+      const pool = await listPool();
+      setPoolSkills(pool);
+    } catch { /* ignore */ }
+  };
+
+  const handleScan = async () => {
+    setScanning(true);
+    setScanError(null);
+    setActionMsg(null);
+    try {
+      const res = await scanLocal(projectPath.trim() || undefined);
+      setScanResults(res);
+      if (res.length === 0) {
+        setScanError("未发现技能。请确认路径下包含 SKILL.md 的技能目录。");
       }
-      return true;
+      onRefresh();
+    } catch (e: any) {
+      setScanError(e.message || "扫描失败。");
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const handleBrowseProjectPath = async () => {
+    try {
+      const dir = await openDirectoryDialog("选择扫描目录");
+      if (dir) setProjectPath(dir);
+    } catch { /* canceled */ }
+  };
+
+  const handleImport = async (skill: DiscoveredSkill) => {
+    setImporting(true);
+    setActionMsg(null);
+    try {
+      await importToPool(skill.path);
+      setActionMsg({ skill: skill.name, success: true, msg: `"${skill.name}" 已复制到技能池` });
+      await reloadPool();
+      setScanResults(prev => prev.filter(s => s.path !== skill.path));
+      onRefresh();
+    } catch (e: any) {
+      setActionMsg({ skill: skill.name, success: false, msg: `复制失败: ${e.message}` });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleArchive = async (skill: DiscoveredSkill) => {
+    setImporting(true);
+    setActionMsg(null);
+    try {
+      await archiveToPool(skill.path);
+      setActionMsg({ skill: skill.name, success: true, msg: `"${skill.name}" 已归档到技能池（原目录已移除）` });
+      await reloadPool();
+      setScanResults(prev => prev.filter(s => s.path !== skill.path));
+      onRefresh();
+    } catch (e: any) {
+      setActionMsg({ skill: skill.name, success: false, msg: `归档失败: ${e.message}` });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // Multi-select: select/deselect all not-in-pool skills
+  const toggleSelectAll = () => {
+    const allPaths = notInPoolSkills.flatMap(s => s.paths);
+    if (selectedPaths.size === allPaths.length && allPaths.length > 0) {
+      setSelectedPaths(new Set());
+    } else {
+      setSelectedPaths(new Set(allPaths));
+    }
+  };
+
+  // Batch import: import all selected paths to pool (skip already in pool)
+  const handleBatchImport = async () => {
+    if (selectedPaths.size === 0) return;
+    setImporting(true);
+    setActionMsg(null);
+    let successCount = 0;
+    let failCount = 0;
+    for (const path of selectedPaths) {
+      try {
+        await importToPool(path);
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    setActionMsg({
+      skill: "batch",
+      success: failCount === 0,
+      msg: `批量入库完成：${successCount} 个成功${failCount > 0 ? `，${failCount} 个失败` : ""}`,
     });
-  }, [skills, statusFilter, tagFilter, search]);
+    setSelectedPaths(new Set());
+    await reloadPool();
+    onRefresh();
+    setImporting(false);
+  };
 
-  // 状态统计
-  const statusCounts = useMemo(() => {
-    const c = { installed: 0, partially_installed: 0, not_installed: 0, all: 0 };
-    skills.forEach((s) => {
-      c.all++;
-      if (s.installStatus === "installed") c.installed++;
-      else if (s.installStatus === "partially_installed") c.partially_installed++;
-      else c.not_installed++;
+  // Batch archive: archive all selected paths to pool
+  const handleBatchArchive = async () => {
+    if (selectedPaths.size === 0) return;
+    setImporting(true);
+    setActionMsg(null);
+    let successCount = 0;
+    let failCount = 0;
+    for (const path of selectedPaths) {
+      try {
+        await archiveToPool(path);
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    setActionMsg({
+      skill: "batch",
+      success: failCount === 0,
+      msg: `批量归档完成：${successCount} 个成功${failCount > 0 ? `，${failCount} 个失败` : ""}`,
     });
-    return c;
-  }, [skills]);
-
-  // 扫描项目技能
-  const handleScanProject = async () => {
-    if (!projectPath.trim()) {
-      setProjectMsg("请输入项目目录路径");
-      return;
-    }
-    setProjectLoading(true);
-    setProjectMsg("");
-    try {
-      localStorage.setItem("skills_project_path", projectPath.trim());
-      const r = await scanProjectSkills(projectPath.trim());
-      setProjectSkills(r || []);
-      setProjectMsg(`找到 ${r?.length || 0} 个项目技能`);
-    } catch (err) {
-      console.error(err);
-      setProjectMsg("扫描失败");
-    } finally {
-      setProjectLoading(false);
-    }
+    setSelectedPaths(new Set());
+    await reloadPool();
+    onRefresh();
+    setImporting(false);
   };
 
-  // 迁移项目技能到库
-  const handleMigrate = async (skill: ProjectSkill) => {
-    const key = `migrate:${skill.name}`;
-    setBusy((b) => ({ ...b, [key]: true }));
-    try {
-      const r = await migrateProjectSkillToLibrary(skill.path, projectPath);
-      if (r?.success) {
-        setProjectMsg(`已迁移: ${skill.name}`);
-        // 刷新
-        await loadGlobal();
-        await handleScanProject();
-      } else {
-        setProjectMsg(`迁移失败: ${r?.error || "unknown"}`);
-      }
-    } catch (err) {
-      console.error(err);
-      setProjectMsg("迁移失败");
-    } finally {
-      setBusy((b) => ({ ...b, [key]: false }));
-    }
-  };
+  const scanInPool = scanResults.filter(s => s.alreadyInPool);
+  const scanNew = scanResults.filter(s => !s.alreadyInPool);
 
-  // 添加标签
-  const handleAddTag = async (skillName: string) => {
-    const tag = tagInput.trim();
-    if (!tag) return;
-    const ok = await addSkillTag(skillName, tag);
-    if (ok) {
-      setSkills((prev) =>
-        prev.map((s) =>
-          s.name === skillName
-            ? { ...s, tags: Array.from(new Set([...(s.tags || []), tag])) }
-            : s
-        )
-      );
-      setTags((prev) => {
-        const found = prev.find((t) => t.tag === tag);
-        if (found) {
-          return prev
-            .map((t) => (t.tag === tag ? { ...t, count: t.count + 1 } : t))
-            .sort((a, b) => b.count - a.count);
-        }
-        return [...prev, { tag, count: 1 }];
-      });
-    }
-    setTagInput("");
-    setEditingTagSkill(null);
-  };
-
-  // 移除标签
-  const handleRemoveTag = async (skillName: string, tag: string) => {
-    const ok = await removeSkillTag(skillName, tag);
-    if (ok) {
-      setSkills((prev) =>
-        prev.map((s) =>
-          s.name === skillName
-            ? { ...s, tags: (s.tags || []).filter((t) => t !== tag) }
-            : s
-        )
-      );
-      setTags((prev) =>
-        prev
-          .map((t) => (t.tag === tag ? { ...t, count: Math.max(0, t.count - 1) } : t))
-          .filter((t) => t.count > 0)
-          .sort((a, b) => b.count - a.count)
-      );
-    }
-  };
-
-  // 安装 / 卸载（单个技能到某个 Agent）
-  const handleInstall = async (skillName: string, agentID: string) => {
-    const key = `install:${skillName}:${agentID}`;
-    setBusy((b) => ({ ...b, [key]: true }));
-    try {
-      const ok = await installSkillToAgent(skillName, agentID);
-      if (ok) {
-        setSkills((prev) =>
-          prev.map((s) =>
-            s.name === skillName
-              ? {
-                  ...s,
-                  installedAgents: Array.from(new Set([...(s.installedAgents || []), agentID])),
-                  installStatus:
-                    Array.from(new Set([...(s.installedAgents || []), agentID])).length >=
-                    s.totalAgents
-                      ? "installed"
-                      : "partially_installed",
-                }
-              : s
-          )
-        );
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setBusy((b) => ({ ...b, [key]: false }));
-    }
-  };
-
-  const handleUninstall = async (skillName: string, agentID: string) => {
-    const key = `uninstall:${skillName}:${agentID}`;
-    setBusy((b) => ({ ...b, [key]: true }));
-    try {
-      const ok = await uninstallSkillFromAgent(skillName, agentID);
-      if (ok) {
-        setSkills((prev) =>
-          prev.map((s) =>
-            s.name === skillName
-              ? {
-                  ...s,
-                  installedAgents: (s.installedAgents || []).filter((a) => a !== agentID),
-                  installStatus:
-                    (s.installedAgents || []).filter((a) => a !== agentID).length === 0
-                      ? "not_installed"
-                      : "partially_installed",
-                }
-              : s
-          )
-        );
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setBusy((b) => ({ ...b, [key]: false }));
-    }
-  };
+  const allNotInPoolPaths = notInPoolSkills.flatMap(s => s.paths);
+  const allSelected = allNotInPoolPaths.length > 0 && selectedPaths.size === allNotInPoolPaths.length;
 
   return (
-    <div className="skills-page">
-      {/* ============ 顶部操作区 ============ */}
-      <header className="page-header">
-        <h1 className="page-title">技能管理</h1>
-        <p className="page-desc">
-          全局技能库共 {skills.length} 个，已安装到所有 Agent 的有 {statusCounts.installed} 个，
-          部分安装 {statusCounts.partially_installed} 个，未安装 {statusCounts.not_installed} 个。
-        </p>
-        <div className="top-actions">
-          <button className="btn btn-secondary" onClick={onRefresh}>
-            🔄 刷新
-          </button>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">技能管理</h2>
+          <p className="text-muted-foreground mt-1">
+            技能池: {poolPath || "未配置"} {poolPath && !loadingPool && <span className="text-xs">({poolSkills.length} 个)</span>}
+            {" | "}本机共 {skills.length} 个技能
+          </p>
         </div>
-      </header>
+        <Button variant="outline" size="sm" onClick={onRefresh}>
+          <RefreshCw className="h-4 w-4" /> 刷新
+        </Button>
+      </div>
 
-      {/* ============ 全局技能库：过滤区 ============ */}
-      <section className="card filter-bar">
-        <div className="filter-row">
-          <div className="filter-label">状态</div>
-          <div className="chip-group">
-            {(
-              [
-                { k: "all", label: `全部 (${statusCounts.all})` },
-                { k: "installed", label: `已安装 (${statusCounts.installed})` },
-                { k: "partially_installed", label: `部分安装 (${statusCounts.partially_installed})` },
-                { k: "not_installed", label: `未安装 (${statusCounts.not_installed})` },
-              ] as { k: StatusFilter; label: string }[]
-            ).map((opt) => (
-              <button
-                key={opt.k}
-                className={`chip ${statusFilter === opt.k ? "active" : ""}`}
-                onClick={() => setStatusFilter(opt.k)}
-                type="button"
-              >
-                {opt.label}
-              </button>
-            ))}
-            {(statusFilter !== "all" || tagFilter !== "" || search.trim() !== "") && (
-              <button
-                className="chip chip-clear"
-                onClick={() => { setStatusFilter("all"); setTagFilter(""); setSearch(""); }}
-                type="button"
-                title="清除所有过滤条件"
-              >
-                ✕ 清除过滤
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="filter-row">
-          <div className="filter-label">标签</div>
-          <div className="chip-group">
-            <button
-              className={`chip ${tagFilter === "" ? "active" : ""}`}
-              onClick={() => setTagFilter("")}
-              type="button"
-            >
-              全部
-            </button>
-            {tags.map((t) => (
-              <button
-                key={t.tag}
-                className={`chip ${tagFilter === t.tag ? "active" : ""}`}
-                onClick={() => setTagFilter(tagFilter === t.tag ? "" : t.tag)}
-                type="button"
-              >
-                #{t.tag} ({t.count})
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="filter-row">
-          <div className="filter-label">搜索</div>
-          <input
-            className="search-input"
-            placeholder="按名称 / 描述 / 标签搜索..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ flex: 1, maxWidth: 420 }}
-          />
-        </div>
-        {(statusFilter !== "all" || tagFilter !== "" || search.trim() !== "") && (
-          <div style={{ fontSize: 12, color: "var(--fg-dim)" }}>
-            当前过滤：{filteredSkills.length} / {skills.length} 个技能
-          </div>
-        )}
-      </section>
-
-      {/* ============ 全局技能库：列表 ============ */}
-      {loading ? (
-        <div className="card empty">
-          <div className="empty-icon">⏳</div>
-          <div>加载技能中...</div>
-        </div>
-      ) : filteredSkills.length === 0 ? (
-        <div className="card empty">
-          <div className="empty-icon">📦</div>
-          <div>暂无匹配的技能，前往「安装技能」添加或调整过滤条件。</div>
-        </div>
-      ) : (
-        <div className="skill-grid">
-          {filteredSkills.map((s) => (
-            <div key={s.name} className="skill-card">
-              <div className="skill-card-head">
-                <div className="skill-name">{s.name}</div>
-                <span
-                  className={`status-badge status-${s.installStatus}`}
-                  title={s.installStatus}
-                >
-                  {statusLabel(s.installStatus)}
-                </span>
-              </div>
-              <div className="skill-desc">{s.description || "—"}</div>
-
-              {/* 标签展示 + 编辑 */}
-              <div className="skill-tags">
-                {(s.tags || []).map((t) => (
-                  <span key={t} className="tag-chip" title={`标签：${t}`}>
-                    #{t}
-                    <button
-                      className="tag-remove"
-                      onClick={() => handleRemoveTag(s.name, t)}
-                      title="移除标签"
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-                {editingTagSkill === s.name ? (
-                  <span className="tag-edit">
-                    <input
-                      autoFocus
-                      value={tagInput}
-                      onChange={(e) => setTagInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleAddTag(s.name);
-                        if (e.key === "Escape") {
-                          setEditingTagSkill(null);
-                          setTagInput("");
-                        }
-                      }}
-                      placeholder="新标签..."
-                      className="tag-input"
-                    />
-                    <button
-                      className="btn btn-xs"
-                      onClick={() => handleAddTag(s.name)}
-                    >
-                      添加
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    className="tag-add"
-                    onClick={() => {
-                      setEditingTagSkill(s.name);
-                      setTagInput("");
-                    }}
-                  >
-                    + 标签
-                  </button>
-                )}
-              </div>
-
-              {/* 元信息 */}
-              <div className="skill-meta">
-                <span className="badge">v {s.latestVersion || "—"}</span>
-                <span className="badge">
-                  {(s.installedAgents || []).length}/{s.totalAgents} 个 Agent
-                </span>
-              </div>
-
-              {/* 已安装的 Agent 列表 */}
-              <div className="skill-agents">
-                {Object.keys(agents).length === 0 ? (
-                  <span style={{ color: "var(--fg-dim)" }}>未配置 Agent</span>
-                ) : (
-                  Object.entries(agents).map(([agentID, ag]) => {
-                    const installed = (s.installedAgents || []).includes(agentID);
-                    const key = `${installed ? "uninstall" : "install"}:${s.name}:${agentID}`;
-                    const isBusy = !!busy[key];
-                    return (
-                      <button
-                        key={agentID}
-                        disabled={isBusy || !ag.detected}
-                        className={`agent-btn ${installed ? "installed" : ""} ${
-                          !ag.detected ? "disabled" : ""
-                        }`}
-                        onClick={() =>
-                          installed ? handleUninstall(s.name, agentID) : handleInstall(s.name, agentID)
-                        }
-                        title={
-                          ag.detected
-                            ? installed
-                              ? `从 ${ag.name} 卸载`
-                              : `安装到 ${ag.name}`
-                            : `${ag.name} 未检测到`
-                        }
-                      >
-                        {isBusy ? "⏳" : installed ? "✓" : "+"} {ag.name}
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
+      {actionMsg && (
+        <Card>
+          <CardContent className="py-3">
+            <p className={`text-sm flex items-center gap-2 ${actionMsg.success ? "text-green-600" : "text-destructive"}`}>
+              {actionMsg.success ? <CheckCircle2 className="h-4 w-4" /> : null}
+              {actionMsg.msg}
+            </p>
+          </CardContent>
+        </Card>
       )}
 
-      {/* ============ 项目技能 ============ */}
-      <section className="card project-skills-section" style={{ marginTop: 28 }}>
-        <div className="section-head">
-          <h2 className="page-subtitle">📂 项目技能（可选）</h2>
-          <div className="section-sub">
-            扫描特定项目目录下的 <code>.*/skills</code> 目录，发现本地的项目专属技能，
-            可一键迁移到全局技能库（复制，不使用软链接，保证独立）。
-          </div>
-        </div>
+      {/* Section 1: Pool Skills Summary */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            技能池汇总 ({inPoolSkills.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {inPoolSkills.length === 0 ? (
+            <p className="text-muted-foreground text-sm py-4 text-center">技能池为空</p>
+          ) : (
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted/50 border-b">
+                    <th className="text-left font-medium px-4 py-2">技能名称</th>
+                    <th className="text-left font-medium px-4 py-2">智能体工具</th>
+                    <th className="text-right font-medium px-4 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inPoolSkills.map((s, idx) => (
+                    <tr key={s.name} className={`border-b last:border-0 hover:bg-muted/30 cursor-pointer ${idx % 2 === 1 ? "bg-muted/[0.03]" : ""}`} onClick={() => onSelect(s)}>
+                      <td className="px-4 py-2 font-medium flex items-center gap-2">
+                        <Puzzle className="h-3.5 w-3.5 text-primary shrink-0" />
+                        {s.name}
+                        <Badge variant="default" className="text-[10px] ml-1">池</Badge>
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          {s.agentNames.map((name, i) => (
+                            <Badge key={i} variant="outline" className="text-[10px]">{name}</Badge>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onSelect(s); }}>详情</Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-        <div className="project-path-row">
-          <input
-            className="search-input"
-            placeholder="项目目录绝对路径（例如 /Users/me/proj 或 C:\code\proj）"
-            value={projectPath}
-            onChange={(e) => setProjectPath(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button
-            className="btn btn-primary"
-            onClick={handleScanProject}
-            disabled={projectLoading}
-          >
-            {projectLoading ? "扫描中..." : "扫描项目技能"}
-          </button>
-        </div>
-        {projectMsg && <div className="project-msg">{projectMsg}</div>}
-
-        {projectSkills.length > 0 && (
-          <div className="skill-grid">
-            {projectSkills.map((ps) => {
-              const key = `migrate:${ps.name}`;
-              const isBusy = !!busy[key];
-              return (
-                <div key={`${ps.path}-${ps.name}`} className="skill-card">
-                  <div className="skill-card-head">
-                    <div className="skill-name">{ps.name}</div>
-                    <span
-                      className={`status-badge ${ps.inLibrary ? "status-installed" : "status-project"}`}
+      {/* Section 2: All Installed Skills (not in pool) — with multi-select */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Puzzle className="h-4 w-4 text-blue-500" />
+              本机技能汇总 ({notInPoolSkills.length})
+            </CardTitle>
+            {notInPoolSkills.length > 0 && (
+              <div className="flex items-center gap-2">
+                {selectedPaths.size > 0 && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={handleBatchImport}
+                      disabled={importing}
                     >
-                      {ps.inLibrary ? "已在库中" : "仅项目"}
-                    </span>
-                  </div>
-                  <div className="skill-desc">{ps.description || "—"}</div>
-                  {(ps.tags && ps.tags.length > 0) && (
-                    <div className="skill-tags">
-                      {ps.tags.map((t) => (
-                        <span key={t} className="tag-chip">
-                          #{t}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="skill-meta">
-                    <span className="badge">v {ps.version || "—"}</span>
-                    <span className="badge">
-                      {ps.isSymlink ? "软链接" : "独立目录"}
-                    </span>
-                  </div>
-                  <div className="skill-path" title={ps.path}>
-                    {ps.path}
-                  </div>
-                  <div className="skill-actions">
-                    {!ps.inLibrary ? (
-                      <button
-                        className="btn btn-primary"
-                        onClick={() => handleMigrate(ps)}
-                        disabled={isBusy}
+                      {importing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                      复制到池 ({selectedPaths.size})
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={handleBatchArchive}
+                      disabled={importing}
+                    >
+                      {importing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Archive className="h-3 w-3" />}
+                      归档到池 ({selectedPaths.size})
+                    </Button>
+                  </>
+                )}
+                <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={toggleSelectAll}>
+                  {allSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                  {allSelected ? "取消全选" : "全选"}
+                </Button>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {notInPoolSkills.length === 0 ? (
+            <p className="text-muted-foreground text-sm py-4 text-center">无额外技能</p>
+          ) : (
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted/50 border-b">
+                    <th className="w-8 px-2 py-2"></th>
+                    <th className="text-left font-medium px-4 py-2">技能名称</th>
+                    <th className="text-left font-medium px-4 py-2">智能体工具</th>
+                    <th className="text-right font-medium px-4 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {notInPoolSkills.map((s) => {
+                    // A skill is "selected" if ALL its paths are selected
+                    const allPathsSelected = s.paths.length > 0 && s.paths.every(p => selectedPaths.has(p));
+                    const somePathsSelected = s.paths.some(p => selectedPaths.has(p));
+                    return (
+                      <tr
+                        key={s.name}
+                        className={`border-b last:border-0 hover:bg-muted/30 cursor-pointer ${somePathsSelected ? "bg-primary/5" : ""}`}
+                        onClick={() => onSelect(s)}
                       >
-                        {isBusy ? "迁移中..." : "迁移到全局技能库"}
-                      </button>
-                    ) : (
-                      <span className="badge" style={{ background: "var(--success)" }}>
-                        已存在于全局技能库
-                      </span>
-                    )}
+                        <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            className="p-0.5 rounded hover:bg-muted"
+                            onClick={() => {
+                              // Toggle all paths for this skill
+                              setSelectedPaths(prev => {
+                                const next = new Set(prev);
+                                if (allPathsSelected) {
+                                  s.paths.forEach(p => next.delete(p));
+                                } else {
+                                  s.paths.forEach(p => next.add(p));
+                                }
+                                return next;
+                              });
+                            }}
+                          >
+                            {allPathsSelected
+                              ? <CheckSquare className="h-4 w-4 text-primary" />
+                              : somePathsSelected
+                                ? <CheckSquare className="h-4 w-4 text-primary/50" />
+                                : <Square className="h-4 w-4 text-muted-foreground" />
+                            }
+                          </button>
+                        </td>
+                        <td className="px-4 py-2 font-medium flex items-center gap-2">
+                          <Puzzle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          {s.name}
+                        </td>
+                        <td className="px-4 py-2">
+                          <div className="flex flex-wrap gap-1">
+                            {s.agentNames.map((name, i) => (
+                              <Badge key={i} variant="outline" className="text-[10px]">{name}</Badge>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onSelect(s); }}>详情</Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Section 3: Local Scan */}
+      <Card>
+        <CardHeader>
+          <CardTitle>本机扫描</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            递归扫描指定目录下所有子目录，寻找包含 SKILL.md 的技能定义。
+          </p>
+          <div className="flex gap-2">
+            <input
+              className="flex-1 px-3 py-2 rounded-md border border-input bg-background text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              placeholder="选择要扫描的目录（可选，留空则扫描所有智能体全局目录）"
+              value={projectPath}
+              onChange={(e) => setProjectPath(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleScan()}
+            />
+            <Button variant="outline" size="sm" onClick={handleBrowseProjectPath}>
+              <FolderOpen className="h-3.5 w-3.5" /> 浏览
+            </Button>
+            <Button onClick={handleScan} disabled={scanning}>
+              {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              扫描
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {scanError && (
+        <Card>
+          <CardContent className="py-4">
+            <p className="text-sm text-destructive">{scanError}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Scan Results: Already in pool */}
+      {scanInPool.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              已在池中 ({scanInPool.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {scanInPool.map((s, i) => (
+                <div key={i} className="border rounded-lg p-3 bg-muted/30">
+                  <div className="font-medium text-sm flex items-center gap-2">
+                    <Puzzle className="h-3.5 w-3.5 text-primary" />
+                    {s.name}
+                    <Badge variant="default" className="text-[10px]">池</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1 truncate" title={s.path}>{s.path}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Scan Results: New discoveries */}
+      {scanNew.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Search className="h-4 w-4 text-blue-500" />
+              新发现 ({scanNew.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {scanNew.map((s, i) => (
+                <div key={i} className="border rounded-lg p-3 border-blue-200 bg-blue-50/20 space-y-2">
+                  <div className="font-medium text-sm flex items-center gap-2">
+                    <Puzzle className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                    <span className="truncate">{s.name}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground font-mono truncate" title={s.path}>{s.path}</p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs flex-1"
+                      onClick={() => handleImport(s)}
+                      disabled={importing}
+                    >
+                      {importing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                      复制到池
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs flex-1"
+                      onClick={() => handleArchive(s)}
+                      disabled={importing}
+                    >
+                      {importing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Archive className="h-3 w-3" />}
+                      归档到池
+                    </Button>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      <style>{styles}</style>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
-
-function statusLabel(s: string): string {
-  switch (s) {
-    case "installed":
-      return "已安装";
-    case "partially_installed":
-      return "部分安装";
-    case "not_installed":
-      return "未安装";
-    case "project_only":
-      return "仅项目";
-    default:
-      return s;
-  }
-}
-
-// 样式
-const styles = `
-.skills-page { width: 100%; }
-.top-actions { display: flex; gap: 8px; margin-top: 10px; }
-
-.filter-bar { display: flex; flex-direction: column; gap: 12px; }
-.filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.filter-label { width: 56px; color: var(--fg-dim); font-size: 13px; }
-.chip-group { display: flex; gap: 6px; flex-wrap: wrap; }
-.chip {
-  padding: 6px 14px;
-  border-radius: 999px;
-  border: 1.5px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  transition: all .15s;
-}
-.chip:hover {
-  background: var(--bg-3);
-  border-color: var(--accent);
-}
-.chip.active {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
-  font-weight: 600;
-}
-.chip-clear {
-  border-color: var(--danger);
-  color: var(--danger);
-  background: rgba(239, 68, 68, 0.08);
-}
-.chip-clear:hover {
-  background: var(--danger);
-  color: white;
-}
-
-.skill-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 14px;
-  margin-top: 14px;
-}
-.skill-card {
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.skill-card-head { display: flex; justify-content: space-between; align-items: center; }
-.skill-name { font-weight: 600; font-size: 15px; }
-.skill-desc { color: var(--fg-dim); font-size: 13px; min-height: 36px; }
-
-.skill-meta { display: flex; gap: 6px; flex-wrap: wrap; }
-.badge {
-  display: inline-block;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: var(--bg-3);
-  color: var(--fg);
-  font-size: 12px;
-}
-.badge.latest { background: var(--primary); color: white; }
-
-.status-badge {
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 500;
-}
-.status-installed { background: var(--success); color: white; }
-.status-partially_installed { background: #e9a23b; color: white; }
-.status-not_installed { background: var(--bg-3); color: var(--fg); }
-.status-project { background: #6a5acd; color: white; }
-
-.skill-tags { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.tag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  background: var(--bg-3);
-  border-radius: 999px;
-  font-size: 12px;
-}
-.tag-remove {
-  background: transparent;
-  border: none;
-  color: var(--fg-dim);
-  cursor: pointer;
-  padding: 0 2px;
-  font-size: 14px;
-  line-height: 1;
-}
-.tag-remove:hover { color: #ff6b6b; }
-.tag-add {
-  background: transparent;
-  border: 1px dashed var(--border);
-  color: var(--fg-dim);
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.tag-add:hover { color: var(--fg); border-color: var(--fg-dim); }
-.tag-edit { display: inline-flex; gap: 4px; align-items: center; }
-.tag-input {
-  width: 110px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 12px;
-}
-
-.skill-agents { display: flex; gap: 6px; flex-wrap: wrap; }
-.agent-btn {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  border-radius: 6px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all .15s;
-}
-.agent-btn:hover:not(.disabled) { background: var(--bg-3); }
-.agent-btn.installed {
-  background: var(--success);
-  color: white;
-  border-color: var(--success);
-}
-.agent-btn.disabled { opacity: 0.4; cursor: not-allowed; }
-
-.project-skills-section .section-head { margin-bottom: 14px; }
-.project-skills-section .section-sub { color: var(--fg-dim); font-size: 13px; margin-top: 6px; }
-.project-skills-section .project-path-row {
-  display: flex; gap: 8px; margin-bottom: 10px;
-}
-.project-msg { color: var(--fg-dim); font-size: 13px; margin-bottom: 8px; }
-.skill-path {
-  font-family: ui-monospace, monospace;
-  font-size: 11px;
-  color: var(--fg-dim);
-  word-break: break-all;
-  background: var(--bg);
-  padding: 4px 6px;
-  border-radius: 4px;
-}
-.skill-actions { display: flex; gap: 6px; }
-.btn-xs { padding: 2px 8px; font-size: 12px; }
-`;

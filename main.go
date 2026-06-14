@@ -1,34 +1,38 @@
 package main
 
 import (
-	"fmt"
-	"os"
+	"embed"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/skillsmanager/skillsmanager/backend/pkg/waillib"
 )
 
-func main() {
-	app := NewApp()
+//go:embed all:frontend/dist
+var assets embed.FS
 
-	// 前端构建产物路径
+func main() {
+	app := waillib.NewApp()
+
 	err := wails.Run(&options.App{
 		Title:  "Skills Manager",
-		Width:  1024,
-		Height: 720,
+		Width:  1200,
+		Height: 800,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 15, G: 23, B: 42, A: 1},
-		OnStartup:        app.OnStartup,
-		OnShutdown:       app.OnShutdown,
+		OnStartup:  app.Startup,
+		OnShutdown: app.Shutdown,
 		Bind: []interface{}{
 			app,
 		},
+		Mac: &mac.Options{
+			Appearance: mac.NSAppearanceNameDarkAqua,
+		},
 	})
-
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		println("Error:", err.Error())
 	}
 }
