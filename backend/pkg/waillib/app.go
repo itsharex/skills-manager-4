@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/skillsmanager/skillsmanager/backend/internal/clawhub"
 	"github.com/skillsmanager/skillsmanager/backend/internal/distribute"
 	"github.com/skillsmanager/skillsmanager/backend/internal/operations"
 	"github.com/skillsmanager/skillsmanager/backend/internal/source"
@@ -20,11 +22,12 @@ import (
 
 // App is the Wails application struct with bridge methods for the frontend.
 type App struct {
-	ctx       context.Context
-	repo      *storage.Repository
-	index     *storage.Index
-	lock      *storage.LockFile
-	installer *distribute.Installer
+	ctx          context.Context
+	repo         *storage.Repository
+	index        *storage.Index
+	lock         *storage.LockFile
+	installer    *distribute.Installer
+	clawhubMgr   *clawhub.Manager // persistent ClawHub manager with cache
 }
 
 // ListedSkill is a flattened skill entry for the frontend skill list.
@@ -85,6 +88,7 @@ func NewApp() *App {
 		index:     index,
 		lock:      lock,
 		installer: distribute.NewInstaller(repo, index, lock),
+		clawhubMgr: clawhub.New(operations.DefaultPoolPath()),
 	}
 }
 
@@ -245,6 +249,25 @@ func (a *App) Search(sourceStr string) ([]models.ResolvedSkill, error) {
 		ctx = a.ctx
 	}
 	return resolver.Resolve(ctx, sourceStr, source.ResolveOptions{})
+}
+
+// SearchMarket performs an aggregated search across all market sources.
+// Built-in sources (ClawHub, skills.sh, local pool) are always searched.
+// Configurable market sources (GitHub repos, registries) are searched if enabled.
+// Results are grouped by source type. A 30-second timeout prevents UI freeze.
+func (a *App) SearchMarket(keyword string) []models.MarketSearchResult {
+	cfg := a.GetConfig()
+	poolPath := cfg.PoolPath
+	if poolPath == "" {
+		poolPath = operations.DefaultPoolPath()
+	}
+
+	// Use a 30-second timeout to prevent UI freeze from slow network calls.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	searcher := source.NewMarketSearcherWithClawHub(poolPath, cfg.MarketSources, a.clawhubMgr)
+	return searcher.SearchAll(ctx, keyword)
 }
 
 // GetStats collects aggregated statistics based on actual scanned data.
@@ -636,6 +659,11 @@ func (a *App) OpenDirectory(dirPath string) error {
 	}
 	cmd := exec.CommandContext(a.ctx, "open", dirPath)
 	return cmd.Start()
+}
+
+// OpenURL opens a URL in the system default browser.
+func (a *App) OpenURL(url string) {
+	runtime.BrowserOpenURL(a.ctx, url)
 }
 
 // DeleteSkillFromPool removes a skill directory from the pool path.

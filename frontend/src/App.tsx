@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { LayoutDashboard, PackageSearch, Puzzle, Settings, Menu, X, Globe, Terminal } from "lucide-react";
+import { LayoutDashboard, PackageSearch, Settings, Menu, X, Globe, Terminal } from "lucide-react";
 import { useI18n } from "./i18n/context";
 import { locales } from "./i18n/translations";
 import DashboardPage from "./pages/DashboardPage";
@@ -12,6 +12,7 @@ import type { ListedSkill, AgentInfo, SkillStats } from "./types";
 import { listSkills, listAgents, getStats } from "./bridge";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
+import logoImg from "./assets/ask.png";
 
 type Page = "dashboard" | "market" | "pool" | "detail" | "settings" | "cli-tips";
 
@@ -70,11 +71,13 @@ export default function App() {
       {/* Sidebar */}
       <aside className={cn("border-r bg-card flex flex-col transition-all duration-200", sidebarOpen ? "w-56" : "w-0 overflow-hidden")}>
         <div className="p-4 border-b">
-          <h1 className="text-lg font-bold flex items-center gap-2">
-            <Puzzle className="h-5 w-5 text-primary" />
-            {t("app.title")}
-          </h1>
-          <p className="text-xs text-muted-foreground mt-1">{t("app.subtitle")}</p>
+          <div className="flex items-center gap-2">
+            <img src={logoImg} alt="Logo" className="h-8 w-8 rounded" />
+            <div>
+              <h1 className="text-lg font-bold">{t("app.title")}</h1>
+              <p className="text-xs text-muted-foreground -mt-0.5">{t("app.subtitle")}</p>
+            </div>
+          </div>
         </div>
         <nav className="flex-1 p-2 space-y-1">
           {NAV_ITEMS.map((item) => (

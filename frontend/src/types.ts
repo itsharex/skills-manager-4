@@ -105,3 +105,20 @@ export interface AgentGroup {
   displayName: string;
   tooltipName: string;
 }
+
+// Market search result types
+export interface MarketSearchResult {
+  sourceName: string;
+  sourceType: string; // "pool" | "clawhub" | "skillssh" | "github" | "registry"
+  skills: MarketSearchSkill[];
+  error?: string;
+}
+
+export interface MarketSearchSkill {
+  name: string;
+  namespace: string;
+  version: string;
+  description: string;
+  source: string; // owner/repo for GitHub, owner/slug for ClawHub
+  installs?: number;
+}

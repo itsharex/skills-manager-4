@@ -36,6 +36,8 @@ export function OpenDirectoryDialog(arg1:string):Promise<string>;
 
 export function OpenFileDialog(arg1:string):Promise<string>;
 
+export function OpenURL(arg1:string):Promise<void>;
+
 export function RunDoctor():Promise<operations.HealthReport>;
 
 export function SaveConfig(arg1:models.Config):Promise<void>;
@@ -43,5 +45,7 @@ export function SaveConfig(arg1:models.Config):Promise<void>;
 export function ScanLocal(arg1:string):Promise<Array<waillib.DiscoveredSkill>>;
 
 export function Search(arg1:string):Promise<Array<models.ResolvedSkill>>;
+
+export function SearchMarket(arg1:string):Promise<Array<models.MarketSearchResult>>;
 
 export function Uninstall(arg1:string,arg2:string):Promise<void>;

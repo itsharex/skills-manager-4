@@ -1,5 +1,5 @@
 // Bridge layer: wraps Wails-generated bindings with error handling.
-import type { ListedSkill, AgentInfo, Config, ResolvedSkill, InstallResult, HealthReport, SkillStats, DiscoveredSkill } from "./types";
+import type { ListedSkill, AgentInfo, Config, ResolvedSkill, InstallResult, HealthReport, SkillStats, DiscoveredSkill, MarketSearchResult } from "./types";
 
 let WailsApp: any = null;
 
@@ -121,8 +121,20 @@ export async function openDirectory(dirPath: string): Promise<void> {
   await app.OpenDirectory(dirPath);
 }
 
+export async function openURL(url: string): Promise<void> {
+  if (!hasWails()) throw new Error("Wails backend not available");
+  const app = await ensureWailsApp();
+  await app.OpenURL(url);
+}
+
 export async function installToProject(skillPath: string, projectPath: string, overwrite: boolean = false): Promise<void> {
   if (!hasWails()) throw new Error("Wails backend not available");
   const app = await ensureWailsApp();
   await app.InstallToProject(skillPath, projectPath, overwrite);
+}
+
+export async function searchMarket(keyword: string): Promise<MarketSearchResult[]> {
+  if (!hasWails()) throw new Error("Wails backend not available");
+  const app = await ensureWailsApp();
+  return await app.SearchMarket(keyword) as MarketSearchResult[];
 }

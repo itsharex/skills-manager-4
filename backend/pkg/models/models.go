@@ -88,6 +88,55 @@ type ResolvedSkill struct {
 	Cleanup   func() `json:"-"` // cleanup temp files
 }
 
+// ClawHubSkill represents a skill in the ClawHub registry.
+type ClawHubSkill struct {
+	Owner       string   `json:"owner"`
+	Slug        string   `json:"slug"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Version     string   `json:"version"`
+	Tags        []string `json:"tags"`
+	Author      string   `json:"author"`
+}
+
+// RuntimeStatus reports the ClawHub runtime environment.
+type RuntimeStatus struct {
+	NodeInstalled    bool   `json:"node_installed"`
+	NodePath         string `json:"node_path"`
+	NodeVersion      string `json:"node_version"`
+	HasNpm           bool   `json:"has_npm"`
+	ClawHubInstalled bool   `json:"clawhub_installed"`
+	ClawHubPath      string `json:"clawhub_path"`
+	ClawHubVersion   string `json:"clawhub_version"`
+	RegistryReachable bool  `json:"registry_reachable"`
+	RegistryName     string `json:"registry_name"`
+	Message          string `json:"message"`
+}
+
+// SkillInfo is a lightweight skill metadata struct.
+type SkillInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// MarketSearchResult is the aggregated search result from market search.
+type MarketSearchResult struct {
+	SourceName string              `json:"sourceName"`
+	SourceType string              `json:"sourceType"` // "pool" | "clawhub" | "skillssh" | "github" | "registry"
+	Skills     []MarketSearchSkill `json:"skills"`
+	Error      string              `json:"error,omitempty"`
+}
+
+// MarketSearchSkill is a single skill in a market search result.
+type MarketSearchSkill struct {
+	Name        string `json:"name"`
+	Namespace   string `json:"namespace"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+	Source      string `json:"source"` // owner/repo for GitHub, owner/slug for ClawHub
+	Installs    int    `json:"installs,omitempty"`
+}
+
 // RepoPaths helper
 type RepoPaths struct {
 	Root       string

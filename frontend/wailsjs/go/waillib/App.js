@@ -66,6 +66,10 @@ export function OpenFileDialog(arg1) {
   return window['go']['waillib']['App']['OpenFileDialog'](arg1);
 }
 
+export function OpenURL(arg1) {
+  return window['go']['waillib']['App']['OpenURL'](arg1);
+}
+
 export function RunDoctor() {
   return window['go']['waillib']['App']['RunDoctor']();
 }
@@ -80,6 +84,10 @@ export function ScanLocal(arg1) {
 
 export function Search(arg1) {
   return window['go']['waillib']['App']['Search'](arg1);
+}
+
+export function SearchMarket(arg1) {
+  return window['go']['waillib']['App']['SearchMarket'](arg1);
 }
 
 export function Uninstall(arg1, arg2) {
