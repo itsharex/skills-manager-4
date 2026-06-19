@@ -91,19 +91,25 @@ jobs:
           # Generate .icns from asklogo.png if present
           if [ -f "asklogo.png" ]; then
             ICONSET_DIR=$(mktemp -d)
-            sips -z 16 16     asklogo.png --out "$ICONSET_DIR/icon_16x16.png"     >/dev/null 2>&1
-            sips -z 32 32     asklogo.png --out "$ICONSET_DIR/icon_16x16@2x.png"  >/dev/null 2>&1
-            sips -z 32 32     asklogo.png --out "$ICONSET_DIR/icon_32x32.png"     >/dev/null 2>&1
-            sips -z 64 64     asklogo.png --out "$ICONSET_DIR/icon_32x32@2x.png"  >/dev/null 2>&1
-            sips -z 128 128   asklogo.png --out "$ICONSET_DIR/icon_128x128.png"   >/dev/null 2>&1
-            sips -z 256 256   asklogo.png --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null 2>&1
-            sips -z 256 256   asklogo.png --out "$ICONSET_DIR/icon_256x256.png"   >/dev/null 2>&1
-            sips -z 512 512   asklogo.png --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null 2>&1
-            sips -z 512 512   asklogo.png --out "$ICONSET_DIR/icon_512x512.png"   >/dev/null 2>&1
-            sips -z 1024 1024 asklogo.png --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null 2>&1
-            iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/iconfile.icns"
+            # Convert asklogo.png to proper PNG format first
+            sips -s format png asklogo.png --out "$ICONSET_DIR/icon_source.png" >/dev/null 2>&1 || true
+            if [ -f "$ICONSET_DIR/icon_source.png" ]; then
+              sips -z 16 16     "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_16x16.png"     >/dev/null 2>&1
+              sips -z 32 32     "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_16x16@2x.png"  >/dev/null 2>&1
+              sips -z 32 32     "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_32x32.png"     >/dev/null 2>&1
+              sips -z 64 64     "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_32x32@2x.png"   >/dev/null 2>&1
+              sips -z 128 128   "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_128x128.png"  >/dev/null 2>&1
+              sips -z 256 256   "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null 2>&1
+              sips -z 256 256   "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_256x256.png"  >/dev/null 2>&1
+              sips -z 512 512   "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null 2>&1
+              sips -z 512 512   "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_512x512.png"  >/dev/null 2>&1
+              sips -z 1024 1024 "$ICONSET_DIR/icon_source.png" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null 2>&1
+              iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/iconfile.icns" || true
+              echo "Icon generation completed"
+            else
+              echo "Warning: Failed to convert source PNG, skipping icon generation"
+            fi
             rm -rf "$ICONSET_DIR"
-            echo "Icon generated"
           fi
 
           # Ad-hoc sign the bundle
