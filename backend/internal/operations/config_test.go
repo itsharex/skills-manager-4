@@ -9,10 +9,10 @@ import (
 	"github.com/skillsmanager/skillsmanager/backend/pkg/models"
 )
 
-func TestDefaultRepoPath(t *testing.T) {
-	path := DefaultRepoPath()
+func TestDefaultPoolPath(t *testing.T) {
+	path := DefaultPoolPath()
 	if path == "" {
-		t.Fatal("DefaultRepoPath returned empty string")
+		t.Fatal("DefaultPoolPath returned empty string")
 	}
 	if !filepath.IsAbs(path) {
 		t.Fatalf("expected absolute path, got %q", path)
@@ -43,7 +43,7 @@ func TestLoadConfig_ValidFile(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 
 	input := models.Config{
-		RepoPath:     "/tmp/test-repo",
+		PoolPath:     "/tmp/test-pool",
 		InstallMode:  "copy",
 		AutoFallback: false,
 		CacheTTL:     7200,
@@ -58,8 +58,8 @@ func TestLoadConfig_ValidFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
-	if cfg.RepoPath != "/tmp/test-repo" {
-		t.Errorf("expected RepoPath /tmp/test-repo, got %q", cfg.RepoPath)
+	if cfg.PoolPath != "/tmp/test-pool" {
+		t.Errorf("expected PoolPath /tmp/test-pool, got %q", cfg.PoolPath)
 	}
 	if cfg.InstallMode != "copy" {
 		t.Errorf("expected InstallMode 'copy', got %q", cfg.InstallMode)
@@ -79,9 +79,9 @@ func TestLoadConfig_PartialDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	// Only set RepoPath, everything else should get defaults
+	// Only set PoolPath, everything else should get defaults
 	partial := map[string]any{
-		"repo_path": "/custom/path",
+		"pool_path": "/custom/path",
 	}
 	data, _ := json.Marshal(partial)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
@@ -92,8 +92,8 @@ func TestLoadConfig_PartialDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
-	if cfg.RepoPath != "/custom/path" {
-		t.Errorf("expected RepoPath /custom/path, got %q", cfg.RepoPath)
+	if cfg.PoolPath != "/custom/path" {
+		t.Errorf("expected PoolPath /custom/path, got %q", cfg.PoolPath)
 	}
 	if cfg.InstallMode != "symlink" {
 		t.Errorf("expected default InstallMode 'symlink', got %q", cfg.InstallMode)
@@ -111,7 +111,7 @@ func TestSaveConfig(t *testing.T) {
 	path := filepath.Join(dir, "subdir", "config.json")
 
 	cfg := &models.Config{
-		RepoPath:     "/my/repo",
+		PoolPath:     "/my/pool",
 		InstallMode:  "symlink",
 		AutoFallback: true,
 		CacheTTL:     1800,
@@ -132,43 +132,46 @@ func TestSaveConfig(t *testing.T) {
 		t.Fatalf("unmarshal saved config: %v", err)
 	}
 
-	if loaded.RepoPath != "/my/repo" {
-		t.Errorf("expected RepoPath /my/repo, got %q", loaded.RepoPath)
+	if loaded.PoolPath != "/my/pool" {
+		t.Errorf("expected PoolPath /my/pool, got %q", loaded.PoolPath)
 	}
 	if loaded.CacheTTL != 1800 {
 		t.Errorf("expected CacheTTL 1800, got %d", loaded.CacheTTL)
 	}
 }
 
-func TestGetRepoPaths(t *testing.T) {
-	paths := GetRepoPaths("/tmp/.skill-repo")
+func TestGetPoolPaths(t *testing.T) {
+	paths := GetPoolPaths("/tmp/.skill-pool")
 
-	if paths.Root != "/tmp/.skill-repo" {
-		t.Errorf("expected Root /tmp/.skill-repo, got %q", paths.Root)
+	if paths.Root != "/tmp/.skill-pool" {
+		t.Errorf("expected Root /tmp/.skill-pool, got %q", paths.Root)
 	}
-	if paths.SkillsDir != "/tmp/.skill-repo/skills" {
-		t.Errorf("expected SkillsDir /tmp/.skill-repo/skills, got %q", paths.SkillsDir)
+	if paths.PoolPath != "/tmp/.skill-pool" {
+		t.Errorf("expected PoolPath /tmp/.skill-pool, got %q", paths.PoolPath)
 	}
-	if paths.IndexPath != "/tmp/.skill-repo/index.json" {
-		t.Errorf("expected IndexPath /tmp/.skill-repo/index.json, got %q", paths.IndexPath)
+	if paths.SkillsDir != "/tmp/.skill-pool" {
+		t.Errorf("expected SkillsDir /tmp/.skill-pool, got %q", paths.SkillsDir)
 	}
-	if paths.LockPath != "/tmp/.skill-repo/lock.json" {
-		t.Errorf("expected LockPath /tmp/.skill-repo/lock.json, got %q", paths.LockPath)
+	if paths.IndexPath != "/tmp/.skill-pool/.meta/index.json" {
+		t.Errorf("expected IndexPath /tmp/.skill-pool/.meta/index.json, got %q", paths.IndexPath)
 	}
-	if paths.ConfigPath != "/tmp/.skill-repo/config.json" {
-		t.Errorf("expected ConfigPath /tmp/.skill-repo/config.json, got %q", paths.ConfigPath)
+	if paths.LockPath != "/tmp/.skill-pool/.meta/lock.json" {
+		t.Errorf("expected LockPath /tmp/.skill-pool/.meta/lock.json, got %q", paths.LockPath)
+	}
+	if paths.ConfigPath != "/tmp/.skill-pool/.meta/config.json" {
+		t.Errorf("expected ConfigPath /tmp/.skill-pool/.meta/config.json, got %q", paths.ConfigPath)
 	}
 }
 
-func TestEnsureRepoDir(t *testing.T) {
+func TestEnsurePoolDir(t *testing.T) {
 	root := t.TempDir()
 
-	if err := EnsureRepoDir(root); err != nil {
-		t.Fatalf("EnsureRepoDir failed: %v", err)
+	if err := EnsurePoolDir(root); err != nil {
+		t.Fatalf("EnsurePoolDir failed: %v", err)
 	}
 
 	// Verify directories exist
-	paths := GetRepoPaths(root)
+	paths := GetPoolPaths(root)
 	if _, err := os.Stat(paths.Root); os.IsNotExist(err) {
 		t.Error("root directory not created")
 	}
@@ -177,22 +180,22 @@ func TestEnsureRepoDir(t *testing.T) {
 	}
 }
 
-func TestInitRepo(t *testing.T) {
+func TestInitPool(t *testing.T) {
 	root := t.TempDir()
 
-	if err := InitRepo(root); err != nil {
-		t.Fatalf("InitRepo failed: %v", err)
+	if err := InitPool(root); err != nil {
+		t.Fatalf("InitPool failed: %v", err)
 	}
 
-	paths := GetRepoPaths(root)
+	paths := GetPoolPaths(root)
 
 	// Verify config.json exists and has defaults
 	cfg, err := LoadConfig(paths.ConfigPath)
 	if err != nil {
-		t.Fatalf("LoadConfig after InitRepo failed: %v", err)
+		t.Fatalf("LoadConfig after InitPool failed: %v", err)
 	}
-	if cfg.RepoPath != root {
-		t.Errorf("expected RepoPath %q, got %q", root, cfg.RepoPath)
+	if cfg.PoolPath != root {
+		t.Errorf("expected PoolPath %q, got %q", root, cfg.PoolPath)
 	}
 
 	// Verify index.json exists
@@ -229,16 +232,6 @@ func TestInitRepo(t *testing.T) {
 
 // --- Phase 1: Config model extension tests ---
 
-func TestDefaultPoolPath(t *testing.T) {
-	path := DefaultPoolPath()
-	if path == "" {
-		t.Fatal("DefaultPoolPath returned empty string")
-	}
-	if !filepath.IsAbs(path) {
-		t.Fatalf("expected absolute path, got %q", path)
-	}
-}
-
 func TestDefaultConfig_HasPoolPath(t *testing.T) {
 	cfg := defaultConfig()
 	if cfg.PoolPath == "" {
@@ -255,7 +248,7 @@ func TestLoadConfig_OldFormatBackwardCompat(t *testing.T) {
 
 	// Write old-style config WITHOUT pool_path and market_sources
 	oldData := map[string]any{
-		"repo_path":     "/old/repo",
+		"repo_path":     "/old/pool",
 		"install_mode":  "copy",
 		"auto_fallback": false,
 		"cache_ttl":     1800,
@@ -270,12 +263,18 @@ func TestLoadConfig_OldFormatBackwardCompat(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	// PoolPath should get default value
+	// PoolPath should get default value (backward compat: repo_path fills PoolPath when PoolPath is empty)
+	// Since defaultConfig() sets PoolPath to DefaultPoolPath() before unmarshal,
+	// and JSON doesn't have pool_path field, PoolPath keeps the default value.
 	if cfg.PoolPath == "" {
 		t.Error("PoolPath should have default value for old config")
 	}
 	if cfg.PoolPath != DefaultPoolPath() {
-		t.Errorf("expected PoolPath %q, got %q", DefaultPoolPath(), cfg.PoolPath)
+		t.Errorf("expected PoolPath %q (default), got %q", DefaultPoolPath(), cfg.PoolPath)
+	}
+	// RepoPath should be preserved from old config
+	if cfg.RepoPath != "/old/pool" {
+		t.Errorf("expected RepoPath /old/pool, got %q", cfg.RepoPath)
 	}
 
 	// MarketSources should be nil (not cause error) for old config
@@ -284,9 +283,6 @@ func TestLoadConfig_OldFormatBackwardCompat(t *testing.T) {
 	}
 
 	// Other fields preserved
-	if cfg.RepoPath != "/old/repo" {
-		t.Errorf("expected RepoPath /old/repo, got %q", cfg.RepoPath)
-	}
 	if cfg.InstallMode != "copy" {
 		t.Errorf("expected InstallMode copy, got %q", cfg.InstallMode)
 	}
@@ -297,7 +293,6 @@ func TestSaveConfig_WithMarketSources(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 
 	cfg := &models.Config{
-		RepoPath:     "/test/repo",
 		PoolPath:     "/test/pool",
 		InstallMode:  "symlink",
 		AutoFallback: true,

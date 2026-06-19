@@ -6,17 +6,42 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// agentSkillsDirOverride allows tests to override agent skills directories
+// without writing to real user home directories. Map keys are agent IDs,
+// values are the override directory paths.
+var (
+	agentSkillsDirOverride map[string]string
+	agentOverrideMu        sync.RWMutex
+)
+
+// SetAgentSkillsDirOverride sets a test override for an agent's skills directory.
+// Pass empty dir to remove the override. This is only for testing.
+func SetAgentSkillsDirOverride(agentID, dir string) {
+	agentOverrideMu.Lock()
+	defer agentOverrideMu.Unlock()
+	if agentSkillsDirOverride == nil {
+		agentSkillsDirOverride = make(map[string]string)
+	}
+	if dir == "" {
+		delete(agentSkillsDirOverride, agentID)
+	} else {
+		agentSkillsDirOverride[agentID] = dir
+	}
+}
 
 // Agent represents a detected or configured AI agent.
 type Agent struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	SkillsDir   string `json:"skills_dir"`
-	AutoDetected bool  `json:"auto_detected"`
-	Enabled     bool   `json:"enabled"`
-	DetectCmd   string `json:"-"` // CLI binary name to detect via exec.LookPath (e.g. "codex")
-	DetectPath  string `json:"-"` // Config/dir path to detect via os.Stat (e.g. "~/.cursor/")
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	SkillsDir           string `json:"skills_dir"`            // Global skills directory (e.g. ~/.claude/skills)
+	ProjectSkillsSubdir string `json:"project_skills_subdir"` // Project-level skills subdir relative to project root (e.g. ".claude/skills")
+	AutoDetected        bool   `json:"auto_detected"`
+	Enabled             bool   `json:"enabled"`
+	DetectCmd           string `json:"-"` // CLI binary name to detect via exec.LookPath (e.g. "codex")
+	DetectPath          string `json:"-"` // Config/dir path to detect via os.Stat (e.g. "~/.cursor/")
 }
 
 // KnownAgents returns the list of known AI agents and their default skills directories.
@@ -35,134 +60,132 @@ func KnownAgents() []Agent {
 		// =====================================================
 
 		// Claude Code — npm install -g @anthropic-ai/claude-code → command: claude
-		{ID: "claude-code", Name: "Claude Code", SkillsDir: filepath.Join(home, ".claude", "skills"), DetectCmd: "claude"},
+		{ID: "claude-code", Name: "Claude Code", SkillsDir: filepath.Join(home, ".claude", "skills"), ProjectSkillsSubdir: ".claude/skills", DetectCmd: "claude"},
 
 		// Gemini CLI — npm install -g @google/gemini-cli → command: gemini
-		{ID: "gemini-cli", Name: "Gemini CLI", SkillsDir: filepath.Join(home, ".gemini", "skills"), DetectCmd: "gemini"},
+		{ID: "gemini-cli", Name: "Gemini CLI", SkillsDir: filepath.Join(home, ".gemini", "skills"), ProjectSkillsSubdir: ".gemini/skills", DetectCmd: "gemini"},
 
 		// OpenAI Codex CLI — npm install -g @openai/codex → command: codex
-		{ID: "codex-cli", Name: "Codex CLI", SkillsDir: filepath.Join(home, ".codex", "skills"), DetectCmd: "codex"},
+		{ID: "codex-cli", Name: "Codex CLI", SkillsDir: filepath.Join(home, ".codex", "skills"), ProjectSkillsSubdir: ".codex/skills", DetectCmd: "codex"},
 
 		// Antigravity CLI (Google) — command: agy
-		// Skills dir: ~/.gemini/antigravity/skills/
-		{ID: "antigravity-cli", Name: "Antigravity CLI", SkillsDir: filepath.Join(home, ".gemini", "antigravity", "skills"), DetectCmd: "agy"},
+		{ID: "antigravity-cli", Name: "Antigravity CLI", SkillsDir: filepath.Join(home, ".gemini", "antigravity", "skills"), ProjectSkillsSubdir: ".antigravity/skills", DetectCmd: "agy"},
 
 		// Aider — pip install aider-install → command: aider
-		{ID: "aider", Name: "Aider", SkillsDir: filepath.Join(home, ".aider", "skills"), DetectCmd: "aider"},
+		{ID: "aider", Name: "Aider", SkillsDir: filepath.Join(home, ".aider", "skills"), ProjectSkillsSubdir: ".aider/skills", DetectCmd: "aider"},
 
 		// OpenCode CLI — npm install -g opencode-ai → command: opencode
-		// Desktop app: /Applications/OpenCode.app, config: ~/.config/opencode/
-		{ID: "opencode", Name: "OpenCode", SkillsDir: filepath.Join(home, ".config", "opencode", "skills"), DetectCmd: "opencode"},
+		{ID: "opencode", Name: "OpenCode", SkillsDir: filepath.Join(home, ".config", "opencode", "skills"), ProjectSkillsSubdir: ".opencode/skills", DetectCmd: "opencode"},
 
 		// OpenCode Desktop — config dir: ~/.config/opencode/
-		{ID: "opencode-desktop", Name: "OpenCode Desktop", SkillsDir: filepath.Join(home, ".config", "opencode", "skills"), DetectPath: filepath.Join(home, ".config", "opencode")},
+		{ID: "opencode-desktop", Name: "OpenCode Desktop", SkillsDir: filepath.Join(home, ".config", "opencode", "skills"), ProjectSkillsSubdir: ".opencode/skills", DetectPath: filepath.Join(home, ".config", "opencode")},
 
 		// SWE-agent — pip install sweagent → command: sweagent
-		{ID: "swe-agent", Name: "SWE-agent", SkillsDir: filepath.Join(home, ".swe-agent", "skills"), DetectCmd: "sweagent"},
+		{ID: "swe-agent", Name: "SWE-agent", SkillsDir: filepath.Join(home, ".swe-agent", "skills"), ProjectSkillsSubdir: ".swe-agent/skills", DetectCmd: "sweagent"},
 
 		// Goose (Block) — brew install block-goose-cli → command: goose
-		{ID: "goose", Name: "Goose", SkillsDir: filepath.Join(home, ".config", "goose", "skills"), DetectCmd: "goose"},
+		{ID: "goose", Name: "Goose", SkillsDir: filepath.Join(home, ".config", "goose", "skills"), ProjectSkillsSubdir: ".goose/skills", DetectCmd: "goose"},
 
 		// Ollama — brew install ollama → command: ollama
-		{ID: "ollama", Name: "Ollama", SkillsDir: filepath.Join(home, ".ollama", "skills"), DetectCmd: "ollama"},
+		{ID: "ollama", Name: "Ollama", SkillsDir: filepath.Join(home, ".ollama", "skills"), ProjectSkillsSubdir: ".ollama/skills", DetectCmd: "ollama"},
 
 		// Amazon Q Developer CLI — command: q
-		{ID: "amazon-q-cli", Name: "Amazon Q CLI", SkillsDir: filepath.Join(home, ".aws", "amazonq", "skills"), DetectCmd: "q"},
+		{ID: "amazon-q-cli", Name: "Amazon Q CLI", SkillsDir: filepath.Join(home, ".aws", "amazonq", "skills"), ProjectSkillsSubdir: ".amazonq/skills", DetectCmd: "q"},
 
 		// Hermes Agent — command: hermes
-		{ID: "hermes", Name: "Hermes", SkillsDir: filepath.Join(home, ".hermes", "skills"), DetectCmd: "hermes"},
+		{ID: "hermes", Name: "Hermes", SkillsDir: filepath.Join(home, ".hermes", "skills"), ProjectSkillsSubdir: ".hermes/skills", DetectCmd: "hermes"},
 
 		// GitHub Copilot CLI — command: github-copilot-cli
-		{ID: "copilot-cli", Name: "Copilot CLI", SkillsDir: filepath.Join(home, ".github-copilot", "skills"), DetectCmd: "github-copilot-cli"},
+		{ID: "copilot-cli", Name: "Copilot CLI", SkillsDir: filepath.Join(home, ".github-copilot", "skills"), ProjectSkillsSubdir: ".github-copilot/skills", DetectCmd: "github-copilot-cli"},
 
 		// CodeGPT — command: codegpt
-		{ID: "codegpt", Name: "CodeGPT", SkillsDir: filepath.Join(home, ".codegpt", "skills"), DetectCmd: "codegpt"},
+		{ID: "codegpt", Name: "CodeGPT", SkillsDir: filepath.Join(home, ".codegpt", "skills"), ProjectSkillsSubdir: ".codegpt/skills", DetectCmd: "codegpt"},
 
 		// Tabby — command: tabby
-		{ID: "tabby", Name: "Tabby", SkillsDir: filepath.Join(home, ".tabby", "skills"), DetectCmd: "tabby"},
+		{ID: "tabby", Name: "Tabby", SkillsDir: filepath.Join(home, ".tabby", "skills"), ProjectSkillsSubdir: ".tabby/skills", DetectCmd: "tabby"},
 
 		// =====================================================
 		// IDE / Desktop apps — detected by os.Stat(DetectPath)
 		// =====================================================
 
 		// Trae CN 国内版 (字节跳动) — config dir: ~/.trae-cn/
-		{ID: "trae-cn", Name: "Trae CN", SkillsDir: filepath.Join(home, ".trae-cn", "skills"), DetectPath: filepath.Join(home, ".trae-cn")},
+		{ID: "trae-cn", Name: "Trae CN", SkillsDir: filepath.Join(home, ".trae-cn", "skills"), ProjectSkillsSubdir: ".trae-cn/skills", DetectPath: filepath.Join(home, ".trae-cn")},
 
 		// Trae 国际版 — config dir: ~/.trae/
-		{ID: "trae", Name: "Trae", SkillsDir: filepath.Join(home, ".trae", "skills"), DetectPath: filepath.Join(home, ".trae")},
+		{ID: "trae", Name: "Trae", SkillsDir: filepath.Join(home, ".trae", "skills"), ProjectSkillsSubdir: ".trae/skills", DetectPath: filepath.Join(home, ".trae")},
 
 		// Trae AICC / Trae Work CN — config dir: ~/.trae-aicc/
-		{ID: "trae-aicc", Name: "Trae AICC", SkillsDir: filepath.Join(home, ".trae-aicc", "skills"), DetectPath: filepath.Join(home, ".trae-aicc")},
+		{ID: "trae-aicc", Name: "Trae AICC", SkillsDir: filepath.Join(home, ".trae-aicc", "skills"), ProjectSkillsSubdir: ".trae-aicc/skills", DetectPath: filepath.Join(home, ".trae-aicc")},
 
 		// Antigravity IDE (Google) — config dir: ~/.antigravity-ide/
-		{ID: "antigravity-ide", Name: "Antigravity IDE", SkillsDir: filepath.Join(home, ".gemini", "antigravity-ide", "skills"), DetectPath: filepath.Join(home, ".antigravity-ide")},
+		{ID: "antigravity-ide", Name: "Antigravity IDE", SkillsDir: filepath.Join(home, ".gemini", "antigravity-ide", "skills"), ProjectSkillsSubdir: ".antigravity-ide/skills", DetectPath: filepath.Join(home, ".antigravity-ide")},
 
 		// Codex Desktop (OpenAI) — config dir: ~/.codex/
-		{ID: "codex-desktop", Name: "Codex Desktop", SkillsDir: filepath.Join(home, ".codex", "skills"), DetectPath: filepath.Join(home, ".codex")},
+		{ID: "codex-desktop", Name: "Codex Desktop", SkillsDir: filepath.Join(home, ".codex", "skills"), ProjectSkillsSubdir: ".codex/skills", DetectPath: filepath.Join(home, ".codex")},
 
 		// Cursor — config dir: ~/.cursor/
-		{ID: "cursor", Name: "Cursor", SkillsDir: filepath.Join(home, ".cursor", "skills"), DetectPath: filepath.Join(home, ".cursor")},
+		{ID: "cursor", Name: "Cursor", SkillsDir: filepath.Join(home, ".cursor", "skills"), ProjectSkillsSubdir: ".cursor/skills", DetectPath: filepath.Join(home, ".cursor")},
 
 		// Windsurf (Codeium) — config dir: ~/.windsurf/
-		{ID: "windsurf", Name: "Windsurf", SkillsDir: filepath.Join(home, ".windsurf", "skills"), DetectPath: filepath.Join(home, ".windsurf")},
+		{ID: "windsurf", Name: "Windsurf", SkillsDir: filepath.Join(home, ".windsurf", "skills"), ProjectSkillsSubdir: ".windsurf/skills", DetectPath: filepath.Join(home, ".windsurf")},
 
 		// Kiro (Amazon) — config dir: ~/.kiro/
-		{ID: "kiro", Name: "Kiro", SkillsDir: filepath.Join(home, ".kiro", "skills"), DetectPath: filepath.Join(home, ".kiro")},
+		{ID: "kiro", Name: "Kiro", SkillsDir: filepath.Join(home, ".kiro", "skills"), ProjectSkillsSubdir: ".kiro/skills", DetectPath: filepath.Join(home, ".kiro")},
 
 		// Claude Desktop — config dir: ~/Library/Application Support/Claude/ (macOS)
-		{ID: "claude-desktop", Name: "Claude Desktop", SkillsDir: filepath.Join(home, "Library", "Application Support", "Claude", "skills"), DetectPath: filepath.Join(home, "Library", "Application Support", "Claude")},
+		{ID: "claude-desktop", Name: "Claude Desktop", SkillsDir: filepath.Join(home, "Library", "Application Support", "Claude", "skills"), ProjectSkillsSubdir: ".claude/skills", DetectPath: filepath.Join(home, "Library", "Application Support", "Claude")},
 
 		// Zed — config dir: ~/.config/zed/
-		{ID: "zed", Name: "Zed", SkillsDir: filepath.Join(home, ".config", "zed", "skills"), DetectPath: filepath.Join(home, ".config", "zed")},
+		{ID: "zed", Name: "Zed", SkillsDir: filepath.Join(home, ".config", "zed", "skills"), ProjectSkillsSubdir: ".zed/skills", DetectPath: filepath.Join(home, ".config", "zed")},
 
 		// JetBrains AI / Junie — config dir: ~/.JetBrains/ (detects any JetBrains IDE)
-		{ID: "jetbrains-ai", Name: "JetBrains AI", SkillsDir: filepath.Join(home, ".jetbrains-ai", "skills"), DetectPath: filepath.Join(home, ".JetBrains")},
+		{ID: "jetbrains-ai", Name: "JetBrains AI", SkillsDir: filepath.Join(home, ".jetbrains-ai", "skills"), ProjectSkillsSubdir: ".jetbrains/skills", DetectPath: filepath.Join(home, ".JetBrains")},
 
 		// Devin — config dir: ~/.devin/
-		{ID: "devin", Name: "Devin", SkillsDir: filepath.Join(home, ".devin", "skills"), DetectPath: filepath.Join(home, ".devin")},
+		{ID: "devin", Name: "Devin", SkillsDir: filepath.Join(home, ".devin", "skills"), ProjectSkillsSubdir: ".devin/skills", DetectPath: filepath.Join(home, ".devin")},
 
 		// =====================================================
 		// VSCode extensions — detected by extension dir in ~/.vscode/extensions/
 		// =====================================================
 
 		// Claude Code VSCode Extension — anthropic.claude-code
-		{ID: "claude-code-vscode", Name: "Claude Code (VSCode)", SkillsDir: filepath.Join(home, ".claude", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "anthropic.claude-code")},
+		{ID: "claude-code-vscode", Name: "Claude Code (VSCode)", SkillsDir: filepath.Join(home, ".claude", "skills"), ProjectSkillsSubdir: ".claude/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "anthropic.claude-code")},
 
 		// Continue — VSCode extension: continue.continue
-		{ID: "continue", Name: "Continue", SkillsDir: filepath.Join(home, ".continue", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "continue.continue")},
+		{ID: "continue", Name: "Continue", SkillsDir: filepath.Join(home, ".continue", "skills"), ProjectSkillsSubdir: ".continue/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "continue.continue")},
 
 		// Cline — VSCode extension: saoudrizwan.claude-dev
-		{ID: "cline", Name: "Cline", SkillsDir: filepath.Join(home, ".cline", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "saoudrizwan.claude-dev")},
+		{ID: "cline", Name: "Cline", SkillsDir: filepath.Join(home, ".cline", "skills"), ProjectSkillsSubdir: ".cline/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "saoudrizwan.claude-dev")},
 
 		// Roo Code / Kilo Code — VSCode extension: rooveterinaryinc.roo-cline
-		{ID: "roo-code", Name: "Roo Code", SkillsDir: filepath.Join(home, ".roocode", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "rooveterinaryinc.roo-cline")},
+		{ID: "roo-code", Name: "Roo Code", SkillsDir: filepath.Join(home, ".roocode", "skills"), ProjectSkillsSubdir: ".roocode/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "rooveterinaryinc.roo-cline")},
 
 		// GitHub Copilot — VSCode extension: github.copilot
-		{ID: "github-copilot", Name: "GitHub Copilot", SkillsDir: filepath.Join(home, ".github-copilot", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "github.copilot")},
+		{ID: "github-copilot", Name: "GitHub Copilot", SkillsDir: filepath.Join(home, ".github-copilot", "skills"), ProjectSkillsSubdir: ".github-copilot/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "github.copilot")},
 
 		// Tabnine — config dir: ~/.TabNine/
-		{ID: "tabnine", Name: "Tabnine", SkillsDir: filepath.Join(home, ".tabnine", "skills"), DetectPath: filepath.Join(home, ".TabNine")},
+		{ID: "tabnine", Name: "Tabnine", SkillsDir: filepath.Join(home, ".tabnine", "skills"), ProjectSkillsSubdir: ".tabnine/skills", DetectPath: filepath.Join(home, ".TabNine")},
 
 		// Supermaven — VSCode extension: supermaven.supermaven
-		{ID: "supermaven", Name: "Supermaven", SkillsDir: filepath.Join(home, ".supermaven", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "supermaven.supermaven")},
+		{ID: "supermaven", Name: "Supermaven", SkillsDir: filepath.Join(home, ".supermaven", "skills"), ProjectSkillsSubdir: ".supermaven/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "supermaven.supermaven")},
 
 		// CodeRabbit — VSCode extension: coderabbit.coderabbit
-		{ID: "coderabbit", Name: "CodeRabbit", SkillsDir: filepath.Join(home, ".coderabbit", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "coderabbit.coderabbit")},
+		{ID: "coderabbit", Name: "CodeRabbit", SkillsDir: filepath.Join(home, ".coderabbit", "skills"), ProjectSkillsSubdir: ".coderabbit/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "coderabbit.coderabbit")},
 
 		// Cody (Sourcegraph) — VSCode extension: sourcegraph.cody-ai
-		{ID: "cody", Name: "Cody", SkillsDir: filepath.Join(home, ".cody", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "sourcegraph.cody-ai")},
+		{ID: "cody", Name: "Cody", SkillsDir: filepath.Join(home, ".cody", "skills"), ProjectSkillsSubdir: ".cody/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "sourcegraph.cody-ai")},
 
 		// Codeium — VSCode extension: codeium.codeium
-		{ID: "codeium", Name: "Codeium", SkillsDir: filepath.Join(home, ".codeium", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "codeium.codeium")},
+		{ID: "codeium", Name: "Codeium", SkillsDir: filepath.Join(home, ".codeium", "skills"), ProjectSkillsSubdir: ".codeium/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "codeium.codeium")},
 
 		// Pieces — VSCode extension: pieces.pieces-vscode
-		{ID: "pieces", Name: "Pieces", SkillsDir: filepath.Join(home, ".pieces", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "pieces.pieces-vscode")},
+		{ID: "pieces", Name: "Pieces", SkillsDir: filepath.Join(home, ".pieces", "skills"), ProjectSkillsSubdir: ".pieces/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "pieces.pieces-vscode")},
 
 		// OpenClaw — VSCode extension: openclaw.openclaw
-		{ID: "openclaw", Name: "OpenClaw", SkillsDir: filepath.Join(home, ".openclaw", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "openclaw.openclaw")},
+		{ID: "openclaw", Name: "OpenClaw", SkillsDir: filepath.Join(home, ".openclaw", "skills"), ProjectSkillsSubdir: ".openclaw/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "openclaw.openclaw")},
 
 		// Amazon Q Developer (IDE) — VSCode extension: amazonwebservices.amazon-q
-		{ID: "amazon-q", Name: "Amazon Q", SkillsDir: filepath.Join(home, ".amazon-q", "skills"), DetectPath: filepath.Join(home, ".vscode", "extensions", "amazonwebservices.amazon-q")},
+		{ID: "amazon-q", Name: "Amazon Q", SkillsDir: filepath.Join(home, ".amazon-q", "skills"), ProjectSkillsSubdir: ".amazon-q/skills", DetectPath: filepath.Join(home, ".vscode", "extensions", "amazonwebservices.amazon-q")},
 	}
 
 	return agents
@@ -277,12 +300,33 @@ func ValidateAgentPath(agentID string) error {
 
 // GetAgentSkillsDir returns the skills directory for a given agent.
 // This is the directory where skill symlinks or copies are placed.
+// If a test override is set via SetAgentSkillsDirOverride, it is returned instead.
 func GetAgentSkillsDir(agentID string) (string, error) {
+	agentOverrideMu.RLock()
+	if dir, ok := agentSkillsDirOverride[agentID]; ok {
+		agentOverrideMu.RUnlock()
+		return dir, nil
+	}
+	agentOverrideMu.RUnlock()
+
 	agent, err := GetAgentByID(agentID)
 	if err != nil {
 		return "", err
 	}
 	return agent.SkillsDir, nil
+}
+
+// GetProjectSkillsDir returns the project-level skills directory for a given agent.
+// This is the directory relative to a project root (e.g. ".claude/skills" for Claude Code).
+func GetProjectSkillsDir(agentID string) (string, error) {
+	agent, err := GetAgentByID(agentID)
+	if err != nil {
+		return "", err
+	}
+	if agent.ProjectSkillsSubdir == "" {
+		return "", fmt.Errorf("agent %q does not have a project-level skills directory configured", agentID)
+	}
+	return agent.ProjectSkillsSubdir, nil
 }
 
 // ResolveAgentIDs resolves agent IDs, handling the special "all" keyword.

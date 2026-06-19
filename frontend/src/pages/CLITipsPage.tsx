@@ -123,8 +123,8 @@ export default function CLITipsPage() {
                 </tr>
               </thead>
               <tbody>
-                {cliTips.map((tip, idx) => (
-                  <tr key={tip.name} className={`border-b last:border-0 ${idx % 2 === 1 ? "bg-muted/[0.03]" : ""}`}>
+                {cliTips.map((tip) => (
+                  <tr key={tip.name} className={`border-b last:border-0`}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <BookOpen className="h-4 w-4 text-muted-foreground" />
@@ -174,8 +174,8 @@ export default function CLITipsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {desktopTips.map((tip, idx) => (
-                    <tr key={tip.name} className={`border-b last:border-0 ${idx % 2 === 1 ? "bg-muted/[0.03]" : ""}`}>
+                  {desktopTips.map((tip) => (
+                    <tr key={tip.name} className={`border-b last:border-0`}>
                       <td className="px-4 py-3 font-medium flex items-center gap-2">
                         {tip.name}
                         <Badge variant="outline" className="text-[10px]">Desktop</Badge>

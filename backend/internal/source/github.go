@@ -140,7 +140,7 @@ func scanSkillFiles(rootDir, namespace, repoName string) ([]models.ResolvedSkill
 		}, nil
 	}
 
-	// Multi-skill repo - look for SKILL.md in immediate subdirectories
+	// Multi-skill repo - look for SKILL.md in subdirectories
 	entries, err := os.ReadDir(rootDir)
 	if err != nil {
 		return nil, fmt.Errorf("read dir: %w", err)
@@ -168,6 +168,37 @@ func scanSkillFiles(rootDir, namespace, repoName string) ([]models.ResolvedSkill
 				Name:      entry.Name(),
 				Version:   version,
 			})
+		} else {
+			// Check one level deeper: e.g. skills/<name>/SKILL.md
+			// This handles skills.sh repos that nest skills under a skills/ directory
+			subDir := filepath.Join(rootDir, entry.Name())
+			subEntries, subErr := os.ReadDir(subDir)
+			if subErr != nil {
+				continue
+			}
+			for _, sub := range subEntries {
+				if !sub.IsDir() {
+					continue
+				}
+				// Skip .git directory
+				if sub.Name() == ".git" {
+					continue
+				}
+				subSkillPath := filepath.Join(subDir, sub.Name(), "SKILL.md")
+				if info, err := os.Stat(subSkillPath); err == nil && !info.IsDir() {
+					parsed, err := storage.ParseSkillFile(subSkillPath)
+					version := "latest"
+					if err == nil && parsed.Version != "" {
+						version = parsed.Version
+					}
+					skills = append(skills, models.ResolvedSkill{
+						LocalPath: filepath.Join(subDir, sub.Name()),
+						Namespace: namespace,
+						Name:      sub.Name(),
+						Version:   version,
+					})
+				}
+			}
 		}
 	}
 

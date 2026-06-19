@@ -64,6 +64,7 @@ export namespace models {
 	    link_targets: LinkTarget[];
 	    repositories: RepoSource[];
 	    cache_ttl: number;
+	    github_token: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -80,6 +81,7 @@ export namespace models {
 	        this.link_targets = this.convertValues(source["link_targets"], LinkTarget);
 	        this.repositories = this.convertValues(source["repositories"], RepoSource);
 	        this.cache_ttl = source["cache_ttl"];
+	        this.github_token = source["github_token"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -107,6 +109,7 @@ export namespace models {
 	    version: string;
 	    description: string;
 	    source: string;
+	    localPath?: string;
 	    installs?: number;
 	
 	    static createFrom(source: any = {}) {
@@ -120,6 +123,7 @@ export namespace models {
 	        this.version = source["version"];
 	        this.description = source["description"];
 	        this.source = source["source"];
+	        this.localPath = source["localPath"];
 	        this.installs = source["installs"];
 	    }
 	}
@@ -271,6 +275,7 @@ export namespace waillib {
 	    name: string;
 	    path: string;
 	    skillsDir: string;
+	    projectSkillsSubdir: string;
 	    detected: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -283,6 +288,7 @@ export namespace waillib {
 	        this.name = source["name"];
 	        this.path = source["path"];
 	        this.skillsDir = source["skillsDir"];
+	        this.projectSkillsSubdir = source["projectSkillsSubdir"];
 	        this.detected = source["detected"];
 	    }
 	}

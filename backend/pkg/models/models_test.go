@@ -73,7 +73,7 @@ func TestSkillID_Partial(t *testing.T) {
 
 func TestConfig_JSON(t *testing.T) {
 	cfg := Config{
-		RepoPath:     "/tmp/.skill-repo",
+		PoolPath:     "/tmp/.skill-pool",
 		InstallMode:  "symlink",
 		AutoFallback: true,
 		DefaultAgents: []string{"claude", "cursor"},
@@ -96,8 +96,8 @@ func TestConfig_JSON(t *testing.T) {
 		t.Fatalf("unmarshal Config: %v", err)
 	}
 
-	if got.RepoPath != cfg.RepoPath {
-		t.Errorf("RepoPath: got %q, want %q", got.RepoPath, cfg.RepoPath)
+	if got.PoolPath != cfg.PoolPath {
+		t.Errorf("PoolPath: got %q, want %q", got.PoolPath, cfg.PoolPath)
 	}
 	if got.InstallMode != cfg.InstallMode {
 		t.Errorf("InstallMode: got %q, want %q", got.InstallMode, cfg.InstallMode)
@@ -131,8 +131,8 @@ func TestConfig_Empty(t *testing.T) {
 		t.Fatalf("unmarshal empty Config: %v", err)
 	}
 
-	if got.RepoPath != "" {
-		t.Errorf("expected empty RepoPath, got %q", got.RepoPath)
+	if got.PoolPath != "" {
+		t.Errorf("expected empty PoolPath, got %q", got.PoolPath)
 	}
 	if got.DefaultAgents != nil {
 		t.Errorf("expected nil DefaultAgents, got %v", got.DefaultAgents)
@@ -143,13 +143,13 @@ func TestConfig_Empty(t *testing.T) {
 }
 
 func TestConfig_PartialJSON(t *testing.T) {
-	raw := `{"repo_path":"/custom/path","install_mode":"copy"}`
+	raw := `{"pool_path":"/custom/path","install_mode":"copy"}`
 	var cfg Config
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatalf("unmarshal partial JSON: %v", err)
 	}
-	if cfg.RepoPath != "/custom/path" {
-		t.Errorf("RepoPath: got %q, want /custom/path", cfg.RepoPath)
+	if cfg.PoolPath != "/custom/path" {
+		t.Errorf("PoolPath: got %q, want /custom/path", cfg.PoolPath)
 	}
 	if cfg.InstallMode != "copy" {
 		t.Errorf("InstallMode: got %q, want copy", cfg.InstallMode)
@@ -518,29 +518,34 @@ func TestResolvedSkill_Empty(t *testing.T) {
 	}
 }
 
-func TestRepoPaths(t *testing.T) {
-	rp := RepoPaths{
-		Root:       "/home/user/.skill-repo",
-		SkillsDir:  "/home/user/.skill-repo/skills",
-		IndexPath:  "/home/user/.skill-repo/index.json",
-		LockPath:   "/home/user/.skill-repo/lock.json",
-		ConfigPath: "/home/user/.skill-repo/config.json",
+func TestPoolPaths(t *testing.T) {
+	pp := PoolPaths{
+		Root:       "/home/user/.skill-pool",
+		PoolPath:   "/home/user/.skill-pool",
+		SkillsDir:  "/home/user/.skill-pool",
+		MetaDir:    "/home/user/.skill-pool/.meta",
+		IndexPath:  "/home/user/.skill-pool/.meta/index.json",
+		LockPath:   "/home/user/.skill-pool/.meta/lock.json",
+		ConfigPath: "/home/user/.skill-pool/.meta/config.json",
 	}
 
-	if rp.Root != "/home/user/.skill-repo" {
-		t.Errorf("Root: got %q", rp.Root)
+	if pp.Root != "/home/user/.skill-pool" {
+		t.Errorf("Root: got %q", pp.Root)
 	}
-	if rp.SkillsDir != "/home/user/.skill-repo/skills" {
-		t.Errorf("SkillsDir: got %q", rp.SkillsDir)
+	if pp.PoolPath != "/home/user/.skill-pool" {
+		t.Errorf("PoolPath: got %q", pp.PoolPath)
 	}
-	if rp.IndexPath != "/home/user/.skill-repo/index.json" {
-		t.Errorf("IndexPath: got %q", rp.IndexPath)
+	if pp.SkillsDir != "/home/user/.skill-pool" {
+		t.Errorf("SkillsDir: got %q", pp.SkillsDir)
 	}
-	if rp.LockPath != "/home/user/.skill-repo/lock.json" {
-		t.Errorf("LockPath: got %q", rp.LockPath)
+	if pp.IndexPath != "/home/user/.skill-pool/.meta/index.json" {
+		t.Errorf("IndexPath: got %q", pp.IndexPath)
 	}
-	if rp.ConfigPath != "/home/user/.skill-repo/config.json" {
-		t.Errorf("ConfigPath: got %q", rp.ConfigPath)
+	if pp.LockPath != "/home/user/.skill-pool/.meta/lock.json" {
+		t.Errorf("LockPath: got %q", pp.LockPath)
+	}
+	if pp.ConfigPath != "/home/user/.skill-pool/.meta/config.json" {
+		t.Errorf("ConfigPath: got %q", pp.ConfigPath)
 	}
 }
 

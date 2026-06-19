@@ -53,15 +53,41 @@ app-bundle: build-macos
 	@mkdir -p "$(BUILD_DIR)/Skills Manager.app/Contents/MacOS"
 	@mkdir -p "$(BUILD_DIR)/Skills Manager.app/Contents/Resources"
 	@cp $(BUILD_DIR)/$(APP_NAME)-darwin-$(shell uname -m) "$(BUILD_DIR)/Skills Manager.app/Contents/MacOS/$(APP_NAME)"
+	@# Generate .icns icon from asklogo.png
+	@if [ -f asklogo.png ]; then \
+		echo "生成应用图标 (.icns)..."; \
+		rm -rf $(BUILD_DIR)/icon.iconset; \
+		mkdir -p $(BUILD_DIR)/icon.iconset; \
+		sips -z 16 16     asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_16x16.png     >/dev/null 2>&1; \
+		sips -z 32 32     asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_16x16@2x.png  >/dev/null 2>&1; \
+		sips -z 32 32     asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_32x32.png     >/dev/null 2>&1; \
+		sips -z 64 64     asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_32x32@2x.png  >/dev/null 2>&1; \
+		sips -z 128 128   asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_128x128.png   >/dev/null 2>&1; \
+		sips -z 256 256   asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_128x128@2x.png >/dev/null 2>&1; \
+		sips -z 256 256   asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_256x256.png   >/dev/null 2>&1; \
+		sips -z 512 512   asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_256x256@2x.png >/dev/null 2>&1; \
+		sips -z 512 512   asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_512x512.png   >/dev/null 2>&1; \
+		sips -z 1024 1024 asklogo.png --out $(BUILD_DIR)/icon.iconset/icon_512x512@2x.png >/dev/null 2>&1; \
+		iconutil -c icns $(BUILD_DIR)/icon.iconset -o $(BUILD_DIR)/iconfile.icns; \
+		cp $(BUILD_DIR)/iconfile.icns "$(BUILD_DIR)/Skills Manager.app/Contents/Resources/iconfile.icns"; \
+		rm -rf $(BUILD_DIR)/icon.iconset; \
+		echo "图标已打包到 .app Bundle"; \
+	else \
+		echo "警告: 未找到 asklogo.png，跳过图标打包"; \
+	fi
 	@echo '<?xml version="1.0" encoding="UTF-8"?>' > "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo '<plist version="1.0"><dict>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo '  <key>CFBundleExecutable</key><string>$(APP_NAME)</string>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo '  <key>CFBundleName</key><string>Skills Manager</string>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
+	@echo '  <key>CFBundleIdentifier</key><string>com.skillsmanager.app</string>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo '  <key>CFBundleVersion</key><string>$(VERSION)</string>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
+	@echo '  <key>CFBundleShortVersionString</key><string>$(VERSION)</string>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo '  <key>CFBundlePackageType</key><string>APPL</string>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
+	@echo '  <key>CFBundleIconFile</key><string>iconfile</string>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo '  <key>LSMinimumSystemVersion</key><string>10.15</string>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo '  <key>NSHighResolutionCapable</key><true/>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
+	@echo '  <key>NSRequiresAquaSystemAppearance</key><false/>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo '</dict></plist>' >> "$(BUILD_DIR)/Skills Manager.app/Contents/Info.plist"
 	@echo "App Bundle: $(BUILD_DIR)/Skills Manager.app"
 

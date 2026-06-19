@@ -12,8 +12,8 @@ func TestRunDoctor_ValidRepo(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if err := InitRepo(root); err != nil {
-		t.Fatalf("InitRepo failed: %v", err)
+	if err := InitPool(root); err != nil {
+		t.Fatalf("InitPool failed: %v", err)
 	}
 
 	report := RunDoctor(root)
@@ -21,8 +21,8 @@ func TestRunDoctor_ValidRepo(t *testing.T) {
 	if report == nil {
 		t.Fatal("expected non-nil report")
 	}
-	if report.RepoPath != root {
-		t.Errorf("expected RepoPath %q, got %q", root, report.RepoPath)
+	if report.PoolPath != root {
+		t.Errorf("expected PoolPath %q, got %q", root, report.PoolPath)
 	}
 	if !report.AllPass {
 		t.Error("expected AllPass true for a valid repo")
@@ -42,26 +42,26 @@ func TestRunDoctor_ValidRepo(t *testing.T) {
 func TestRunDoctor_NoRepo(t *testing.T) {
 	t.Parallel()
 
-	nonExistent := filepath.Join(t.TempDir(), "nonexistent-repo")
+	nonExistent := filepath.Join(t.TempDir(), "nonexistent-pool")
 	report := RunDoctor(nonExistent)
 
 	if report == nil {
 		t.Fatal("expected non-nil report")
 	}
 	if report.AllPass {
-		t.Error("expected AllPass false for missing repo")
+		t.Error("expected AllPass false for missing pool")
 	}
 
-	// Verify repo_root check fails
-	foundRepoRootFail := false
+	// Verify pool_root check fails
+	foundPoolRootFail := false
 	for _, c := range report.Checks {
-		if c.Name == "repo_root" && c.Status == "fail" {
-			foundRepoRootFail = true
+		if c.Name == "pool_root" && c.Status == "fail" {
+			foundPoolRootFail = true
 			break
 		}
 	}
-	if !foundRepoRootFail {
-		t.Error("expected repo_root check to fail")
+	if !foundPoolRootFail {
+		t.Error("expected pool_root check to fail")
 	}
 }
 
@@ -69,11 +69,11 @@ func TestRunDoctor_BrokenSymlink(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if err := InitRepo(root); err != nil {
-		t.Fatalf("InitRepo failed: %v", err)
+	if err := InitPool(root); err != nil {
+		t.Fatalf("InitPool failed: %v", err)
 	}
 
-	paths := GetRepoPaths(root)
+	paths := GetPoolPaths(root)
 
 	// Create a broken symlink in the skills directory
 	badLink := filepath.Join(paths.SkillsDir, "bogus-skill@latest")

@@ -77,7 +77,7 @@ func TestCLI_ListEmpty(t *testing.T) {
 
 	output := captureStdout(func() {
 		cli := NewCLI()
-		cli.RootCmd.SetArgs([]string{"list", "--repo", repoDir})
+		cli.RootCmd.SetArgs([]string{"list", "--pool", repoDir})
 		if err := cli.RootCmd.Execute(); err != nil {
 			t.Fatal(err)
 		}
@@ -94,7 +94,7 @@ func TestCLI_ConfigGetSet(t *testing.T) {
 	// config get repo_path
 	output := captureStdout(func() {
 		cli := NewCLI()
-		cli.RootCmd.SetArgs([]string{"config", "get", "repo_path", "--repo", repoDir})
+		cli.RootCmd.SetArgs([]string{"config", "get", "repo_path", "--pool", repoDir})
 		if err := cli.RootCmd.Execute(); err != nil {
 			t.Fatal(err)
 		}
@@ -106,7 +106,7 @@ func TestCLI_ConfigGetSet(t *testing.T) {
 	// config get install_mode
 	output2 := captureStdout(func() {
 		cli2 := NewCLI()
-		cli2.RootCmd.SetArgs([]string{"config", "get", "install_mode", "--repo", repoDir})
+		cli2.RootCmd.SetArgs([]string{"config", "get", "install_mode", "--pool", repoDir})
 		if err := cli2.RootCmd.Execute(); err != nil {
 			t.Fatal(err)
 		}

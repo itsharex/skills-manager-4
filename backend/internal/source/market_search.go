@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -209,18 +210,21 @@ func (m *MarketSearcher) searchPool(ctx context.Context, keyword string) ([]mode
 				if subErr != nil {
 					continue
 				}
-				if kw == "" || matchKeyword(string(subData), kw) {
+				desc := extractDescription(string(subData))
+				if kw == "" || matchSkillField(skillName, desc, kw) {
 					skills = append(skills, models.MarketSearchSkill{
 						Name:        skillName,
 						Namespace:   "pool",
 						Version:     sub.Name(),
-						Description: extractDescription(string(subData)),
+						Description: desc,
+						LocalPath:   filepath.Join(skillDir, sub.Name()),
 					})
 				}
 			}
 			continue
 		}
-		if kw == "" || matchKeyword(string(data), kw) {
+		desc := extractDescription(string(data))
+		if kw == "" || matchSkillField(skillName, desc, kw) {
 			parsed, _ := storage.ParseSkillFile(skillMD)
 			version := "latest"
 			if parsed.Version != "" {
@@ -230,7 +234,8 @@ func (m *MarketSearcher) searchPool(ctx context.Context, keyword string) ([]mode
 				Name:        skillName,
 				Namespace:   "pool",
 				Version:     version,
-				Description: extractDescription(string(data)),
+				Description: desc,
+				LocalPath:   skillDir,
 			})
 		}
 	}
@@ -290,11 +295,15 @@ func (m *MarketSearcher) searchSkillsSh(ctx context.Context, keyword string) ([]
 			skills = append(skills, models.MarketSearchSkill{
 				Name:        r.Name,
 				Namespace:   "skillssh:" + r.Source,
-				Version:     "latest",
+				Version:     fmt.Sprintf("%d", r.Installs),
 				Source:      r.ID,
 				Installs:    r.Installs,
 			})
 		}
+
+		// Fetch descriptions from GitHub in parallel
+		fetchDescriptionsForSkillsSh(skills, results)
+
 		ch <- result{skills: skills}
 	}()
 
@@ -304,6 +313,74 @@ func (m *MarketSearcher) searchSkillsSh(ctx context.Context, keyword string) ([]
 	case r := <-ch:
 		return r.skills, r.err
 	}
+}
+
+// fetchDescriptionsForSkillsSh fetches SKILL.md descriptions from GitHub for skills.sh results.
+func fetchDescriptionsForSkillsSh(skills []models.MarketSearchSkill, rawResults []skillsShSkill) {
+	var wg sync.WaitGroup
+	for i := range skills {
+		if i >= len(rawResults) {
+			break
+		}
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			r := rawResults[idx]
+			desc := fetchSkillDescriptionFromGitHub(r.Source, r.Name)
+			if desc != "" {
+				skills[idx].Description = desc
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// fetchSkillDescriptionFromGitHub fetches the description field from a skill's SKILL.md on GitHub.
+func fetchSkillDescriptionFromGitHub(source, skillName string) string {
+	// Sanitize skillName: replace colons with dashes for URL paths
+	safeName := strings.ReplaceAll(skillName, ":", "-")
+
+	// Try common path patterns for SKILL.md
+	// skills.sh repos typically use: skills/<skillName>/SKILL.md
+	// Some repos use: <skillName>/SKILL.md or just SKILL.md at root
+	paths := []string{
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/main/skills/%s/SKILL.md", source, safeName),
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/master/skills/%s/SKILL.md", source, safeName),
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/main/%s/SKILL.md", source, safeName),
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/master/%s/SKILL.md", source, safeName),
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/main/SKILL.md", source),
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	for _, url := range paths {
+		desc, ok := fetchDescriptionFromURL(client, url)
+		if ok && desc != "" {
+			return desc
+		}
+	}
+	return ""
+}
+
+// fetchDescriptionFromURL fetches a SKILL.md from a URL and extracts the description.
+func fetchDescriptionFromURL(client *http.Client, url string) (string, bool) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("User-Agent", "skills-manager")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", false
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", false
+	}
+	return extractDescription(string(data)), true
 }
 
 // searchGitHubRepo searches a GitHub repo for skills matching the keyword.
@@ -366,6 +443,9 @@ func (m *MarketSearcher) searchGitHubViaAPI(ctx context.Context, sourceURL, keyw
 	}
 	req.Header.Set("User-Agent", "skills-manager")
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "token "+token)
+	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
@@ -440,9 +520,23 @@ func (m *MarketSearcher) searchRegistry(ctx context.Context, src models.MarketSo
 }
 
 // matchKeyword checks if the keyword appears in the skill content.
+// Deprecated: use matchSkillField for more precise matching.
 func matchKeyword(content, keyword string) bool {
 	lower := strings.ToLower(content)
 	return strings.Contains(lower, keyword)
+}
+
+// matchSkillField checks if the keyword matches the skill name or description.
+// This avoids matching common words inside the full SKILL.md body.
+func matchSkillField(name, description, keyword string) bool {
+	kw := strings.ToLower(keyword)
+	if strings.Contains(strings.ToLower(name), kw) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(description), kw) {
+		return true
+	}
+	return false
 }
 
 // extractDescription extracts a short description from SKILL.md content.

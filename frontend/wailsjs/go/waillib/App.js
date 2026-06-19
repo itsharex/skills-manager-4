@@ -34,12 +34,20 @@ export function Install(arg1, arg2) {
   return window['go']['waillib']['App']['Install'](arg1, arg2);
 }
 
+export function InstallMarketSkill(arg1, arg2) {
+  return window['go']['waillib']['App']['InstallMarketSkill'](arg1, arg2);
+}
+
 export function InstallToAgent(arg1, arg2, arg3) {
   return window['go']['waillib']['App']['InstallToAgent'](arg1, arg2, arg3);
 }
 
 export function InstallToProject(arg1, arg2, arg3) {
   return window['go']['waillib']['App']['InstallToProject'](arg1, arg2, arg3);
+}
+
+export function InstallToProjectForAgent(arg1, arg2, arg3, arg4) {
+  return window['go']['waillib']['App']['InstallToProjectForAgent'](arg1, arg2, arg3, arg4);
 }
 
 export function ListAgents() {

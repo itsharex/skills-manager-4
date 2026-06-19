@@ -37,6 +37,7 @@ type ListedSkill struct {
 	AgentIDs    []string `json:"agentIds"`
 	AgentNames  []string `json:"agentNames"`
 	Paths       []string `json:"paths"`
+	StorePath   string   `json:"storePath,omitempty"` // pool storage path (e.g. ~/.skill-pool/<name>/)
 	Latest      string   `json:"latest"`
 	Versions    []string `json:"versions"`
 	Description string   `json:"description"`
@@ -45,11 +46,12 @@ type ListedSkill struct {
 
 // AgentInfo describes a detected or known AI agent.
 type AgentInfo struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	SkillsDir string `json:"skillsDir"`
-	Detected  bool   `json:"detected"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Path                string `json:"path"`
+	SkillsDir           string `json:"skillsDir"`
+	ProjectSkillsSubdir string `json:"projectSkillsSubdir"`
+	Detected            bool   `json:"detected"`
 }
 
 // InstallUIOptions configures a skill installation from the frontend.
@@ -70,9 +72,9 @@ type InstallUILog struct {
 
 // NewApp creates a new App instance and initializes backend services.
 func NewApp() *App {
-	repoPath := operations.DefaultRepoPath()
-	paths := operations.GetRepoPaths(repoPath)
-	repo := storage.NewRepository(repoPath)
+	poolPath := operations.DefaultPoolPath()
+	paths := operations.GetPoolPaths(poolPath)
+	repo := storage.NewRepository(poolPath)
 
 	index, err := storage.NewIndex(paths.IndexPath)
 	if err != nil {
@@ -83,12 +85,17 @@ func NewApp() *App {
 		println("Warning: failed to load lock file:", err.Error())
 	}
 
+	// Initialize operation logger
+	if err := operations.InitOpLogger(poolPath); err != nil {
+		println("Warning: failed to init op logger:", err.Error())
+	}
+
 	return &App{
 		repo:      repo,
 		index:     index,
 		lock:      lock,
 		installer: distribute.NewInstaller(repo, index, lock),
-		clawhubMgr: clawhub.New(operations.DefaultPoolPath()),
+		clawhubMgr: clawhub.New(poolPath),
 	}
 }
 
@@ -100,18 +107,32 @@ func (a *App) Shutdown(ctx context.Context) {}
 
 // GetConfig loads and returns the current configuration.
 func (a *App) GetConfig() models.Config {
-	paths := operations.GetRepoPaths(operations.DefaultRepoPath())
+	paths := operations.GetPoolPaths(operations.DefaultPoolPath())
 	cfg, err := operations.LoadConfig(paths.ConfigPath)
 	if err != nil {
 		return models.Config{}
+	}
+	// Sync GitHub token to environment on first load
+	if cfg.GitHubToken != "" {
+		os.Setenv("GITHUB_TOKEN", cfg.GitHubToken)
 	}
 	return *cfg
 }
 
 // SaveConfig persists the configuration to disk.
 func (a *App) SaveConfig(cfg models.Config) error {
-	paths := operations.GetRepoPaths(operations.DefaultRepoPath())
-	return operations.SaveConfig(paths.ConfigPath, &cfg)
+	paths := operations.GetPoolPaths(operations.DefaultPoolPath())
+	err := operations.SaveConfig(paths.ConfigPath, &cfg)
+	if err != nil {
+		return err
+	}
+	// Sync GitHub token to environment variable for API access
+	if cfg.GitHubToken != "" {
+		os.Setenv("GITHUB_TOKEN", cfg.GitHubToken)
+	} else {
+		os.Unsetenv("GITHUB_TOKEN")
+	}
+	return nil
 }
 
 // ListSkills returns all skills found on the machine, merged by name.
@@ -121,7 +142,7 @@ func (a *App) ListSkills() []ListedSkill {
 	inPool := a.poolSkillDirSet()
 	merged := make(map[string]*ListedSkill) // key = skill name
 
-	// 1. Skills from the index (installed via skill install)
+	// 1. Skills from the index (installed via skill install / market install)
 	if a.index != nil {
 		entries, err := a.index.List()
 		if err == nil {
@@ -138,11 +159,21 @@ func (a *App) ListSkills() []ListedSkill {
 						InPool:      inPool[e.Name],
 					}
 				}
+				// Set StorePath from the pool if available
+				skill := merged[e.Name]
+				if skill.StorePath == "" {
+					cfg := a.GetConfig()
+					poolSkillPath := filepath.Join(cfg.PoolPath, e.Name)
+					if _, err := os.Stat(poolSkillPath); err == nil {
+						skill.StorePath = poolSkillPath
+					}
+				}
 			}
 		}
 	}
 
 	// 2. Skills found in detected agents' global skill directories
+	cfg := a.GetConfig()
 	for _, ag := range distribute.DetectedAgents() {
 		entries, err := os.ReadDir(ag.SkillsDir)
 		if err != nil {
@@ -154,22 +185,73 @@ func (a *App) ListSkills() []ListedSkill {
 			}
 			skillPath := filepath.Join(ag.SkillsDir, entry.Name())
 			name := entry.Name()
+			// Resolve symlink to determine StorePath (pool location)
+			storePath := ""
+			if linkDest, err := os.Readlink(skillPath); err == nil {
+				if !filepath.IsAbs(linkDest) {
+					linkDest, _ = filepath.Abs(filepath.Join(filepath.Dir(skillPath), linkDest))
+				}
+				storePath = linkDest
+			} else {
+				// Not a symlink — check if this skill exists in Pool
+				poolSkillPath := filepath.Join(cfg.PoolPath, name)
+				if _, err := os.Stat(poolSkillPath); err == nil {
+					storePath = poolSkillPath
+				}
+			}
 			if existing, ok := merged[name]; ok {
 				// Merge: add this agent's path
 				existing.AgentIDs = append(existing.AgentIDs, ag.ID)
 				existing.AgentNames = append(existing.AgentNames, ag.Name)
 				existing.Paths = append(existing.Paths, skillPath)
+				if existing.StorePath == "" && storePath != "" {
+					existing.StorePath = storePath
+				}
 			} else {
 				merged[name] = &ListedSkill{
 					Name:        name,
 					AgentIDs:    []string{ag.ID},
 					AgentNames:  []string{ag.Name},
 					Paths:       []string{skillPath},
+					StorePath:   storePath,
 					Latest:      "",
 					Versions:    nil,
 					Description: "",
 					InPool:      inPool[name],
 				}
+			}
+		}
+	}
+
+	// 3. Skills in Pool that are not in any agent or index
+	// (e.g. market-installed skills that haven't been symlinked to agents yet)
+	poolEntries, err := os.ReadDir(cfg.PoolPath)
+	if err == nil {
+		for _, entry := range poolEntries {
+			if !entry.IsDir() || entry.Name() == ".meta" {
+				continue
+			}
+			name := entry.Name()
+			skillMDPath := filepath.Join(cfg.PoolPath, name, "SKILL.md")
+			if _, err := os.Stat(skillMDPath); err != nil {
+				continue
+			}
+			if _, ok := merged[name]; ok {
+				// Already found via index or agent — just ensure InPool is set
+				merged[name].InPool = true
+				continue
+			}
+			// Skill exists in Pool but not in any agent — still show it
+			merged[name] = &ListedSkill{
+				Name:        name,
+				AgentIDs:    []string{},
+				AgentNames:  []string{},
+				Paths:       []string{},
+				StorePath:   filepath.Join(cfg.PoolPath, name),
+				Latest:      "",
+				Versions:    nil,
+				Description: "",
+				InPool:      true,
 			}
 		}
 	}
@@ -190,7 +272,7 @@ func (a *App) ListAgents() []AgentInfo {
 	all := distribute.DetectedAgents()
 	var detectedList, notDetectedList []AgentInfo
 	for _, ag := range all {
-		info := AgentInfo{ID: ag.ID, Name: ag.Name, Path: ag.SkillsDir, SkillsDir: ag.SkillsDir, Detected: ag.AutoDetected}
+		info := AgentInfo{ID: ag.ID, Name: ag.Name, Path: ag.SkillsDir, SkillsDir: ag.SkillsDir, ProjectSkillsSubdir: ag.ProjectSkillsSubdir, Detected: ag.AutoDetected}
 		if ag.AutoDetected {
 			detectedList = append(detectedList, info)
 		} else {
@@ -270,6 +352,165 @@ func (a *App) SearchMarket(keyword string) []models.MarketSearchResult {
 	return searcher.SearchAll(ctx, keyword)
 }
 
+// InstallMarketSkill installs a skill from market search results.
+// It handles different source types:
+//   - pool: skill is already local, symlink to agent dirs
+//   - clawhub/skillssh/github/registry: resolve from remote source and install
+func (a *App) InstallMarketSkill(skill models.MarketSearchSkill, agentIDs []string) ([]InstallUILog, error) {
+	if len(agentIDs) == 0 {
+		return nil, fmt.Errorf("请先选择目标智能体")
+	}
+
+	agentsStr := strings.Join(agentIDs, ",")
+	operations.LogOp("install", skill.Name,
+		fmt.Sprintf("市场安装: %s (来源: %s/%s)", skill.Name, skill.Namespace, skill.Source),
+		skill.Source, "", agentsStr, false, "")
+
+	// Pool skills: already local, just symlink to agent dirs
+	if skill.LocalPath != "" {
+		var logs []InstallUILog
+		for _, agentID := range agentIDs {
+			skillsDir, err := distribute.GetAgentSkillsDir(agentID)
+			if err != nil {
+				operations.LogOp("install", skill.Name, fmt.Sprintf("安装到 %s 失败", agentID), skill.LocalPath, "", agentID, false, err.Error())
+				logs = append(logs, InstallUILog{SkillName: skill.Name, Version: skill.Version, Error: err.Error()})
+				continue
+			}
+			destPath := filepath.Join(skillsDir, filepath.Base(skill.LocalPath))
+			if err := a.InstallToAgent(skill.LocalPath, skillsDir, true); err != nil {
+				operations.LogOp("install", skill.Name, fmt.Sprintf("symlink %s -> %s 失败", skill.LocalPath, destPath), skill.LocalPath, destPath, agentID, false, err.Error())
+				logs = append(logs, InstallUILog{SkillName: skill.Name, Version: skill.Version, Error: err.Error()})
+				continue
+			}
+			operations.LogOp("install", skill.Name, fmt.Sprintf("symlink %s -> %s", skill.LocalPath, destPath), skill.LocalPath, destPath, agentID, true, "")
+			logs = append(logs, InstallUILog{SkillName: skill.Name, Version: skill.Version, Path: destPath})
+		}
+		return logs, nil
+	}
+
+	// Remote skills: resolve source URL, copy to Pool, then symlink to agents
+	sourceURL := buildMarketSourceURL(skill)
+	if sourceURL == "" {
+		operations.LogOp("install", skill.Name, "无法确定技能来源", skill.Source, "", agentsStr, false, "no source URL")
+		return nil, fmt.Errorf("无法确定技能来源: %s", skill.Name)
+	}
+
+	operations.LogOp("install", skill.Name, fmt.Sprintf("解析远程源: %s", sourceURL), sourceURL, "", agentsStr, false, "")
+
+	resolver, err := source.NewResolver(sourceURL)
+	if err != nil {
+		operations.LogOp("install", skill.Name, fmt.Sprintf("创建 resolver 失败: %s", sourceURL), sourceURL, "", agentsStr, false, err.Error())
+		return nil, fmt.Errorf("create resolver: %w", err)
+	}
+	ctx := context.Background()
+	if a.ctx != nil {
+		ctx = a.ctx
+	}
+	resolved, err := resolver.Resolve(ctx, sourceURL, source.ResolveOptions{Version: skill.Version})
+	if err != nil {
+		operations.LogOp("install", skill.Name, fmt.Sprintf("解析源失败: %s", sourceURL), sourceURL, "", agentsStr, false, err.Error())
+		return nil, fmt.Errorf("resolve source: %w", err)
+	}
+
+	// Filter resolved skills: only install the one matching the user's selection
+	var matched []models.ResolvedSkill
+	for _, sk := range resolved {
+		if strings.EqualFold(sk.Name, skill.Name) {
+			matched = append(matched, sk)
+		}
+	}
+	// If no exact match found, install all resolved skills (fallback for single-skill repos)
+	if len(matched) == 0 {
+		matched = resolved
+	}
+
+	cfg := a.GetConfig()
+	poolPath := cfg.PoolPath
+	if poolPath == "" {
+		poolPath = operations.DefaultPoolPath()
+	}
+
+	var logs []InstallUILog
+	for _, sk := range matched {
+		skillName := sk.Name
+		poolDest := filepath.Join(poolPath, skillName)
+
+		// If already in pool, skip copy but still symlink to agents
+		if _, err := os.Stat(poolDest); err != nil {
+			// Copy resolved skill to Pool (~/.skill-pool/<name>/)
+			if err := os.MkdirAll(poolPath, 0755); err != nil {
+				operations.LogOp("install", skillName, fmt.Sprintf("创建 Pool 目录失败: %s", poolPath), sourceURL, poolDest, agentsStr, false, err.Error())
+				logs = append(logs, InstallUILog{SkillName: skillName, Version: sk.Version, Error: err.Error()})
+				continue
+			}
+			if err := copyDir(sk.LocalPath, poolDest); err != nil {
+				operations.LogOp("install", skillName, fmt.Sprintf("复制到 Pool 失败: %s -> %s", sk.LocalPath, poolDest), sourceURL, poolDest, agentsStr, false, err.Error())
+				logs = append(logs, InstallUILog{SkillName: skillName, Version: sk.Version, Error: err.Error()})
+				continue
+			}
+			operations.LogOp("install", skillName, fmt.Sprintf("复制到 Pool: %s -> %s", sk.LocalPath, poolDest), sourceURL, poolDest, "", true, "")
+		} else {
+			operations.LogOp("install", skillName, fmt.Sprintf("已在 Pool 中: %s", poolDest), sourceURL, poolDest, "", true, "")
+		}
+
+		// Symlink from Pool to each agent's skills directory
+		for _, agentID := range agentIDs {
+			skillsDir, err := distribute.GetAgentSkillsDir(agentID)
+			if err != nil {
+				operations.LogOp("install", skillName, fmt.Sprintf("获取智能体目录失败: %s", agentID), sourceURL, poolDest, agentID, false, err.Error())
+				logs = append(logs, InstallUILog{SkillName: skillName, Version: sk.Version, Error: err.Error()})
+				continue
+			}
+			destPath := filepath.Join(skillsDir, skillName)
+			if err := a.InstallToAgent(poolDest, skillsDir, true); err != nil {
+				operations.LogOp("install", skillName, fmt.Sprintf("symlink %s -> %s 失败", poolDest, destPath), sourceURL, destPath, agentID, false, err.Error())
+				logs = append(logs, InstallUILog{SkillName: skillName, Version: sk.Version, Error: err.Error()})
+				continue
+			}
+			operations.LogOp("install", skillName, fmt.Sprintf("symlink %s -> %s", poolDest, destPath), sourceURL, destPath, agentID, true, "")
+			logs = append(logs, InstallUILog{SkillName: skillName, Version: sk.Version, Path: destPath})
+		}
+	}
+	// Clean up temp dir after all installs (all resolved skills share the same tmpDir)
+	for _, sk := range resolved {
+		if sk.Cleanup != nil {
+			sk.Cleanup()
+			break // only need to call once since they all remove the same tmpDir
+		}
+	}
+	return logs, nil
+}
+
+// buildMarketSourceURL constructs a resolvable source URL from a MarketSearchSkill.
+func buildMarketSourceURL(skill models.MarketSearchSkill) string {
+	// For skills.sh: source is "owner/repo/slug", extract "owner/repo"
+	if strings.HasPrefix(skill.Namespace, "skillssh:") {
+		repo := strings.TrimPrefix(skill.Namespace, "skillssh:")
+		return "https://github.com/" + repo
+	}
+	// For ClawHub: source is "owner/slug"
+	if strings.HasPrefix(skill.Namespace, "clawhub:") {
+		owner := strings.TrimPrefix(skill.Namespace, "clawhub:")
+		if skill.Source != "" {
+			return "https://github.com/" + skill.Source
+		}
+		return "https://github.com/" + owner
+	}
+	// For GitHub: source is "owner/repo"
+	if strings.HasPrefix(skill.Namespace, "github:") {
+		repo := strings.TrimPrefix(skill.Namespace, "github:")
+		return "https://github.com/" + repo
+	}
+	// Fallback: use source field directly
+	if skill.Source != "" {
+		if strings.HasPrefix(skill.Source, "http") {
+			return skill.Source
+		}
+		return "https://github.com/" + skill.Source
+	}
+	return ""
+}
+
 // GetStats collects aggregated statistics based on actual scanned data.
 func (a *App) GetStats() operations.SkillStats {
 	skills := a.ListSkills()
@@ -298,11 +539,16 @@ func (a *App) GetStats() operations.SkillStats {
 
 // RunDoctor runs all diagnostic checks.
 func (a *App) RunDoctor() operations.HealthReport {
-	r := operations.RunDoctor(operations.DefaultRepoPath())
+	r := operations.RunDoctor(operations.DefaultPoolPath())
 	if r == nil {
 		return operations.HealthReport{}
 	}
 	return *r
+}
+
+// GetOpLogs returns the last N operation log entries.
+func (a *App) GetOpLogs(n int) []models.OpLog {
+	return operations.GetOpLogs(n)
 }
 
 // DiscoveredSkill represents a skill found during scanning.
@@ -316,31 +562,35 @@ type DiscoveredSkill struct {
 	AlreadyInPool bool   `json:"alreadyInPool"`
 }
 
-// ListPool reads the configured local pool directory and returns all skills found there.
+// ListPool reads the configured local pool directory,
+// returning all skills found. Market-installed skills are now stored directly
+// in the pool, so only the pool directory needs to be scanned.
 func (a *App) ListPool() []DiscoveredSkill {
 	cfg := a.GetConfig()
 	results := make([]DiscoveredSkill, 0)
+
+	// Scan pool directory (~/.skill-pool/)
 	entries, err := os.ReadDir(cfg.PoolPath)
-	if err != nil {
-		return results
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			skillPath := filepath.Join(cfg.PoolPath, entry.Name())
+			skillMDPath := filepath.Join(skillPath, "SKILL.md")
+			if _, err := os.Stat(skillMDPath); err != nil {
+				continue
+			}
+			results = append(results, DiscoveredSkill{
+				Name:          entry.Name(),
+				Namespace:     "pool",
+				Version:       "",
+				Path:          skillPath,
+				AlreadyInPool: true,
+			})
 		}
-		skillPath := filepath.Join(cfg.PoolPath, entry.Name())
-		skillMDPath := filepath.Join(skillPath, "SKILL.md")
-		if _, err := os.Stat(skillMDPath); err != nil {
-			continue
-		}
-		results = append(results, DiscoveredSkill{
-			Name:          entry.Name(),
-			Namespace:     "pool",
-			Version:       "",
-			Path:          skillPath,
-			AlreadyInPool: true,
-		})
 	}
+
 	return results
 }
 
@@ -437,60 +687,70 @@ func (a *App) scanGlobalPool() []DiscoveredSkill {
 	return results
 }
 
-// scanProjectPool recursively scans the given directory for skill definitions.
-// It walks all subdirectories looking for SKILL.md files and records the
-// directory relationship for later archiving to pool.
+// scanProjectPool scans known agent project-level skill directories under the given project path.
+// It only looks in standard agent subdirectories (e.g. .claude/skills/, .cursor/skills/),
+// NOT by walking the entire directory tree. This avoids false positives from non-skill
+// directories that happen to contain SKILL.md files.
+// alreadyInPool is determined by resolving symlinks (points to pool) or name matching.
 func (a *App) scanProjectPool(projectPath string) []DiscoveredSkill {
+	cfg := a.GetConfig()
+	poolPath := cfg.PoolPath
 	inPool := a.poolSkillDirSet()
 	results := make([]DiscoveredSkill, 0)
-	seenPaths := make(map[string]bool)
+	seenKeys := make(map[string]bool) // deduplicate by "agentID:skillName"
 
-	// Recursively walk the directory tree looking for SKILL.md
-	filepath.WalkDir(projectPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d == nil {
-			return nil
+	for _, ag := range distribute.KnownAgents() {
+		if ag.ProjectSkillsSubdir == "" {
+			continue
 		}
-
-		// WalkDir uses Lstat — symlinks to dirs are NOT IsDir. Resolve them manually.
-		isDir := d.IsDir()
-		if !isDir && d.Type()&os.ModeSymlink != 0 {
-			if target, statErr := os.Stat(path); statErr == nil && target.IsDir() {
-				isDir = true
+		agentSkillsDir := filepath.Join(projectPath, ag.ProjectSkillsSubdir)
+		entries, err := os.ReadDir(agentSkillsDir)
+		if err != nil {
+			continue // directory doesn't exist, skip
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
 			}
+			skillPath := filepath.Join(agentSkillsDir, entry.Name())
+			skillMDPath := filepath.Join(skillPath, "SKILL.md")
+			if _, err := os.Stat(skillMDPath); err != nil {
+				continue // no SKILL.md, not a valid skill
+			}
+
+			skillName := entry.Name()
+			key := ag.ID + ":" + skillName
+			if seenKeys[key] {
+				continue
+			}
+			seenKeys[key] = true
+
+			// Determine alreadyInPool: resolve symlink to check if it points to pool
+			alreadyInPool := false
+			if linkDest, err := os.Readlink(skillPath); err == nil {
+				if !filepath.IsAbs(linkDest) {
+					linkDest, _ = filepath.Abs(filepath.Join(filepath.Dir(skillPath), linkDest))
+				}
+				if poolPath != "" && strings.HasPrefix(linkDest, poolPath) {
+					alreadyInPool = true
+				}
+			}
+			// Fallback: name-based check if not already determined
+			if !alreadyInPool && inPool[skillName] {
+				alreadyInPool = true
+			}
+
+			results = append(results, DiscoveredSkill{
+				Name:          skillName,
+				Namespace:     "project:" + filepath.Base(projectPath),
+				Version:       "",
+				Path:          skillPath,
+				AgentID:       ag.ID,
+				AgentName:     ag.Name,
+				AlreadyInPool: alreadyInPool,
+			})
 		}
-		if !isDir {
-			return nil
-		}
-		// Skip well-known non-skill directories only — do NOT skip all hidden dirs,
-		// because agent skill directories like .opencode/skills/ are hidden.
-		name := d.Name()
-		if name == ".git" || name == "node_modules" || name == "__pycache__" ||
-			name == "target" || name == ".idea" || name == ".vscode" ||
-			name == ".vs" || name == "dist" || name == "build" ||
-			name == ".next" || name == ".nuxt" || name == ".output" ||
-			name == "vendor" || name == ".tox" || name == "venv" ||
-			name == ".venv" || name == "env" || name == ".env" {
-			return filepath.SkipDir
-		}
-		// Check if this directory contains SKILL.md
-		skillMDPath := filepath.Join(path, "SKILL.md")
-		if _, err := os.Stat(skillMDPath); err != nil {
-			return nil // no SKILL.md here, keep walking
-		}
-		if seenPaths[path] {
-			return nil
-		}
-		seenPaths[path] = true
-		skillName := filepath.Base(path)
-		results = append(results, DiscoveredSkill{
-			Name:          skillName,
-			Namespace:     "project:" + filepath.Base(projectPath),
-			Version:       "",
-			Path:          path,
-			AlreadyInPool: inPool[skillName],
-		})
-		return nil
-	})
+	}
 	return results
 }
 
@@ -555,12 +815,27 @@ func (a *App) DeleteSkill(skillPath string) error {
 	return os.RemoveAll(skillPath)
 }
 
-// ArchiveToPool moves a skill from an agent directory into the pool (copy + delete source).
-// This is different from ImportToPool which only copies.
+// ArchiveToPool copies a skill into the pool directory.
+// If the source is a symlink pointing to the pool, it's already archived — skip.
+// For agent directory skills (non-symlink), copies to pool and removes the source.
 func (a *App) ArchiveToPool(sourcePath string) error {
 	cfg := a.GetConfig()
 	if cfg.PoolPath == "" {
 		return fmt.Errorf("pool path is not configured")
+	}
+
+	// If sourcePath is a symlink, resolve it to check if it points to pool
+	linkDest, err := os.Readlink(sourcePath)
+	if err == nil {
+		// It's a symlink — resolve to absolute path
+		if !filepath.IsAbs(linkDest) {
+			linkDest, _ = filepath.Abs(filepath.Join(filepath.Dir(sourcePath), linkDest))
+		}
+		// If symlink already points to pool, nothing to do
+		if strings.HasPrefix(linkDest, cfg.PoolPath) {
+			operations.LogOp("archive", filepath.Base(sourcePath), fmt.Sprintf("已在池中 (symlink -> %s)", linkDest), sourcePath, linkDest, "", true, "")
+			return nil
+		}
 	}
 
 	info, err := os.Stat(sourcePath)
@@ -576,12 +851,19 @@ func (a *App) ArchiveToPool(sourcePath string) error {
 		// Skill may not have SKILL.md, still allow archiving the directory
 	}
 
-	skillName := filepath.Base(sourcePath)
+	// Determine skill name: strip @version suffix for repo skills
+	dirName := filepath.Base(sourcePath)
+	skillName := dirName
+	if idx := strings.LastIndex(dirName, "@"); idx > 0 {
+		skillName = dirName[:idx]
+	}
+
 	destDir := filepath.Join(cfg.PoolPath, skillName)
 
-	// If already in pool, just delete the source
+	// If already in pool, skip copy
 	if _, err := os.Stat(destDir); err == nil {
-		return os.RemoveAll(sourcePath)
+		operations.LogOp("archive", skillName, fmt.Sprintf("已在池中: %s", destDir), sourcePath, destDir, "", true, "")
+		return nil
 	}
 
 	// Create pool directory if needed
@@ -589,17 +871,18 @@ func (a *App) ArchiveToPool(sourcePath string) error {
 		return fmt.Errorf("create pool directory: %w", err)
 	}
 
-	// Copy to pool first
+	// Copy to pool
 	if err := copyDir(sourcePath, destDir); err != nil {
+		operations.LogOp("archive", skillName, fmt.Sprintf("归档失败: %s -> %s", sourcePath, destDir), sourcePath, destDir, "", false, err.Error())
 		return fmt.Errorf("copy skill to pool: %w", err)
 	}
 
-	// Then remove the source
+	// Remove source (it's from an agent directory, not repo)
 	if err := os.RemoveAll(sourcePath); err != nil {
-		// Non-fatal: the copy succeeded, just log the error
 		println("Warning: failed to remove source after archiving:", err.Error())
 	}
 
+	operations.LogOp("archive", skillName, fmt.Sprintf("归档入池: %s -> %s", sourcePath, destDir), sourcePath, destDir, "", true, "")
 	return nil
 }
 
@@ -637,17 +920,20 @@ func copyDir(src, dst string) error {
 }
 
 // OpenDirectoryDialog shows a native directory picker dialog.
+// ShowHiddenFiles is enabled so users can select hidden directories like ~/.skill-pool/.
 func (a *App) OpenDirectoryDialog(title string) (string, error) {
 	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:               title,
 		CanCreateDirectories: true,
+		ShowHiddenFiles:     true,
 	})
 }
 
 // OpenFileDialog shows a native file picker dialog.
 func (a *App) OpenFileDialog(title string) (string, error) {
 	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: title,
+		Title:           title,
+		ShowHiddenFiles: true,
 	})
 }
 
@@ -666,24 +952,73 @@ func (a *App) OpenURL(url string) {
 	runtime.BrowserOpenURL(a.ctx, url)
 }
 
-// DeleteSkillFromPool removes a skill directory from the pool path.
-func (a *App) DeleteSkillFromPool(skillPath string) error {
+// DeleteSkillFromPool removes a skill from the pool and ALL agent directories that reference it.
+// This is a machine-level delete: removes pool files + all agent global symlinks/copies + all project-level copies.
+// skillName is the skill directory name under the pool (e.g. "gh-cli").
+func (a *App) DeleteSkillFromPool(skillName string) error {
 	cfg := a.GetConfig()
 	if cfg.PoolPath == "" {
 		return fmt.Errorf("pool path is not configured")
 	}
-	// Only allow deleting from pool path
-	if !strings.HasPrefix(skillPath, cfg.PoolPath) {
-		return fmt.Errorf("can only delete skills from pool directory")
+
+	poolSkillPath := filepath.Join(cfg.PoolPath, skillName)
+
+	// Verify the skill exists in pool
+	if _, err := os.Stat(poolSkillPath); err != nil {
+		return fmt.Errorf("skill %q not found in pool: %w", skillName, err)
 	}
-	info, err := os.Stat(skillPath)
-	if err != nil {
+
+	// 1. Remove from all agent global directories (symlinks or copies)
+	for _, ag := range distribute.DetectedAgents() {
+		agentSkillPath := filepath.Join(ag.SkillsDir, skillName)
+		if _, err := os.Lstat(agentSkillPath); err != nil {
+			continue
+		}
+		if err := os.RemoveAll(agentSkillPath); err != nil {
+			operations.LogOp("delete", skillName, fmt.Sprintf("从智能体 %s 全局删除失败: %s", ag.Name, agentSkillPath), "", agentSkillPath, ag.ID, false, err.Error())
+		} else {
+			operations.LogOp("delete", skillName, fmt.Sprintf("从智能体 %s 全局删除: %s", ag.Name, agentSkillPath), "", agentSkillPath, ag.ID, true, "")
+		}
+	}
+
+	// 2. Remove from pool
+	if err := os.RemoveAll(poolSkillPath); err != nil {
+		operations.LogOp("delete", skillName, fmt.Sprintf("从 Pool 删除失败: %s", poolSkillPath), "", poolSkillPath, "", false, err.Error())
+		return fmt.Errorf("remove skill from pool: %w", err)
+	}
+
+	operations.LogOp("delete", skillName, fmt.Sprintf("从 Pool 删除（机器级）: %s", poolSkillPath), "", poolSkillPath, "", true, "")
+	return nil
+}
+
+// DeleteSkillFromAgent removes a skill from a specific agent's global skills directory only.
+// It does NOT remove the skill from the pool. skillPath is the full path in the agent's dir.
+func (a *App) DeleteSkillFromAgent(skillPath string) error {
+	if _, err := os.Lstat(skillPath); err != nil {
 		return fmt.Errorf("skill path does not exist: %w", err)
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("skill path is not a directory")
+	skillName := filepath.Base(skillPath)
+	if err := os.RemoveAll(skillPath); err != nil {
+		operations.LogOp("delete", skillName, fmt.Sprintf("从智能体全局删除失败: %s", skillPath), "", skillPath, "", false, err.Error())
+		return fmt.Errorf("remove skill from agent: %w", err)
 	}
-	return os.RemoveAll(skillPath)
+	operations.LogOp("delete", skillName, fmt.Sprintf("从智能体全局删除: %s", skillPath), "", skillPath, "", true, "")
+	return nil
+}
+
+// DeleteSkillFromProject removes a skill from a project-level directory only.
+// projectSkillPath is the full path to the skill in the project directory.
+func (a *App) DeleteSkillFromProject(projectSkillPath string) error {
+	if _, err := os.Lstat(projectSkillPath); err != nil {
+		return fmt.Errorf("skill path does not exist: %w", err)
+	}
+	skillName := filepath.Base(projectSkillPath)
+	if err := os.RemoveAll(projectSkillPath); err != nil {
+		operations.LogOp("delete", skillName, fmt.Sprintf("从项目删除失败: %s", projectSkillPath), "", projectSkillPath, "", false, err.Error())
+		return fmt.Errorf("remove skill from project: %w", err)
+	}
+	operations.LogOp("delete", skillName, fmt.Sprintf("从项目删除: %s", projectSkillPath), "", projectSkillPath, "", true, "")
+	return nil
 }
 
 // InstallToAgent creates a symlink from the pool skill to the agent's skills directory.
@@ -753,6 +1088,53 @@ func (a *App) InstallToProject(skillPath, projectPath string, overwrite bool) er
 	}
 
 	projectSkillsDir := filepath.Join(projectPath, ".opencode", "skills")
+	if err := os.MkdirAll(projectSkillsDir, 0755); err != nil {
+		return fmt.Errorf("create project skills directory: %w", err)
+	}
+
+	skillName := filepath.Base(skillPath)
+	destPath := filepath.Join(projectSkillsDir, skillName)
+
+	if _, err := os.Lstat(destPath); err == nil {
+		if !overwrite {
+			return fmt.Errorf("skill already installed in project: %s", destPath)
+		}
+		if err := os.RemoveAll(destPath); err != nil {
+			return fmt.Errorf("remove existing skill in project: %w", err)
+		}
+	}
+
+	// Try symlink first; fall back to copy on failure
+	if err := os.Symlink(skillPath, destPath); err != nil {
+		return copyDir(skillPath, destPath)
+	}
+	return nil
+}
+
+// InstallToProjectForAgent installs a skill to a project directory using the
+// agent-specific project-level skills subdirectory (e.g. ".claude/skills" for Claude Code).
+func (a *App) InstallToProjectForAgent(skillPath, projectPath, agentID string, overwrite bool) error {
+	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
+		return fmt.Errorf("skill does not exist: %s", skillPath)
+	}
+	info, err := os.Stat(skillPath)
+	if err != nil {
+		return fmt.Errorf("cannot access skill: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("skill path is not a directory")
+	}
+
+	if _, err := os.Stat(projectPath); os.IsNotExist(err) {
+		return fmt.Errorf("project path does not exist: %s", projectPath)
+	}
+
+	subdir, err := distribute.GetProjectSkillsDir(agentID)
+	if err != nil {
+		return fmt.Errorf("get project skills dir for agent %s: %w", agentID, err)
+	}
+
+	projectSkillsDir := filepath.Join(projectPath, subdir)
 	if err := os.MkdirAll(projectSkillsDir, 0755); err != nil {
 		return fmt.Errorf("create project skills directory: %w", err)
 	}

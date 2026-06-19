@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
-import { RefreshCw, ChevronDown, ChevronUp, FolderOpen, Plus, Trash2, Globe, Database, ToggleLeft, ToggleRight, AlertCircle, CheckCircle2 } from "lucide-react";
+import { RefreshCw, ChevronDown, ChevronUp, FolderOpen, Plus, Trash2, Globe, Database, ToggleLeft, ToggleRight, AlertCircle, Key, ScrollText } from "lucide-react";
+import { toast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { useI18n } from "../i18n/context";
-import { getConfig, saveConfig, openDirectoryDialog } from "../bridge";
-import type { AgentGroup, AgentInfo, Config, MarketSource } from "../types";
+import { getConfig, saveConfig, openDirectoryDialog, getOpLogs } from "../bridge";
+import type { AgentGroup, AgentInfo, Config, MarketSource, OpLog } from "../types";
 
 interface Props {
   agents: AgentInfo[];
@@ -79,14 +81,19 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
   const [config, setConfig] = useState<Config | null>(null);
   const [poolPath, setPoolPath] = useState("");
   const [savingPoolPath, setSavingPoolPath] = useState(false);
-  const [poolPathMsg, setPoolPathMsg] = useState<string | null>(null);
+  const [gitHubToken, setGitHubToken] = useState("");
+  const [savingToken, setSavingToken] = useState(false);
 
   // Market sources state
   const [marketSources, setMarketSources] = useState<MarketSource[]>([]);
   const [newSource, setNewSource] = useState<Partial<MarketSource>>({ name: "", url: "", type: "github", enabled: true, branch: "main" });
   const [sourceValidation, setSourceValidation] = useState<string | null>(null);
   const [savingSources, setSavingSources] = useState(false);
-  const [sourcesMsg, setSourcesMsg] = useState<string | null>(null);
+
+  // Operation logs state
+  const [opLogs, setOpLogs] = useState<OpLog[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
 
   // Load config on mount
   useEffect(() => {
@@ -95,6 +102,7 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
         const cfg = await getConfig();
         setConfig(cfg);
         setPoolPath(cfg.pool_path || "");
+        setGitHubToken(cfg.github_token || "");
         setMarketSources(cfg.market_sources || []);
       } catch {
         // backend not available
@@ -106,13 +114,11 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
   const handleSavePoolPath = async () => {
     if (!config) return;
     setSavingPoolPath(true);
-    setPoolPathMsg(null);
     try {
       await saveConfig({ ...config, pool_path: poolPath });
-      setPoolPathMsg("✓ 技能池路径已保存");
-      setTimeout(() => setPoolPathMsg(null), 3000);
+      toast.success("技能池路径已保存");
     } catch (e: any) {
-      setPoolPathMsg(`✗ 保存失败: ${e.message}`);
+      toast.error(`保存失败: ${e.message}`);
     } finally {
       setSavingPoolPath(false);
     }
@@ -123,10 +129,22 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
       const dir = await openDirectoryDialog("选择技能池目录");
       if (dir) {
         setPoolPath(dir);
-        setPoolPathMsg(null);
       }
     } catch (e: any) {
       // User canceled dialog
+    }
+  };
+
+  const handleSaveGitHubToken = async () => {
+    if (!config) return;
+    setSavingToken(true);
+    try {
+      await saveConfig({ ...config, github_token: gitHubToken.trim() });
+      toast.success(gitHubToken.trim() ? "GitHub Token 已保存" : "GitHub Token 已清除");
+    } catch (e: any) {
+      toast.error(`保存失败: ${e.message}`);
+    } finally {
+      setSavingToken(false);
     }
   };
 
@@ -164,10 +182,9 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
       setSavingSources(true);
       try {
         await saveConfig({ ...config, market_sources: updated });
-        setSourcesMsg("✓ 市场来源已添加");
-        setTimeout(() => setSourcesMsg(null), 3000);
+        toast.success("市场来源已添加");
       } catch (e: any) {
-        setSourcesMsg(`✗ 保存失败: ${e.message}`);
+        toast.error(`保存失败: ${e.message}`);
       } finally {
         setSavingSources(false);
       }
@@ -200,6 +217,23 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
     }
   };
 
+  const handleLoadLogs = async () => {
+    if (showLogs) {
+      setShowLogs(false);
+      return;
+    }
+    setLoadingLogs(true);
+    try {
+      const logs = await getOpLogs(50);
+      setOpLogs(logs || []);
+      setShowLogs(true);
+    } catch {
+      toast.error("加载操作日志失败");
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
   const groups = groupAgentsByPath(agents);
   const displayed = showAll ? groups : groups.slice(0, INITIAL_SHOW);
   const remaining = groups.length - INITIAL_SHOW;
@@ -224,11 +258,11 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
             配置本地技能池目录（默认 ~/.skill-pool/）。该目录作为本机技能仓库，扫描结果将与此目录交叉匹配。
           </p>
           <div className="flex gap-2">
-            <input
-              className="flex-1 px-3 py-2 rounded-md border border-input bg-background text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            <Input
+              className="flex-1"
               placeholder="~/.skill-pool/"
               value={poolPath}
-              onChange={(e) => { setPoolPath(e.target.value); setPoolPathMsg(null); }}
+              onChange={(e) => { setPoolPath(e.target.value); }}
             />
             <Button variant="outline" size="sm" onClick={handleBrowsePoolPath}>
               <FolderOpen className="h-3.5 w-3.5" />
@@ -238,17 +272,42 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
               {savingPoolPath ? "保存中..." : "保存"}
             </Button>
           </div>
-          {poolPathMsg && (
-            <p className={`text-xs flex items-center gap-1 ${poolPathMsg.startsWith("✓") ? "text-green-600" : "text-destructive"}`}>
-              {poolPathMsg.startsWith("✓") ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
-              {poolPathMsg.replace(/^[✓✗]\s*/, "")}
-            </p>
-          )}
+        </CardContent>
+      </Card>
+
+      {/* GitHub Token Configuration */}
+      <Card className="border-t pt-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-4 w-4" />
+            GitHub Token
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            配置 GitHub Personal Access Token 以提升 API 访问配额。未配置时 GitHub API 限制为 60 次/小时，配置后可提升至 5000 次/小时。
+            ClawHub 和 skills.sh 搜索均依赖 GitHub API，遇到 403 错误时请配置此 Token。
+          </p>
+          <div className="flex gap-2">
+            <Input
+              className="flex-1"
+              type="password"
+              placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+              value={gitHubToken}
+              onChange={(e) => { setGitHubToken(e.target.value); }}
+            />
+            <Button onClick={handleSaveGitHubToken} disabled={savingToken}>
+              {savingToken ? "保存中..." : "保存"}
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            生成方式：GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token（无需勾选任何权限）
+          </p>
         </CardContent>
       </Card>
 
       {/* Market Sources Management */}
-      <Card>
+      <Card className="border-t pt-6">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Globe className="h-4 w-4" />
@@ -303,15 +362,14 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
           <div className="border rounded-lg p-3 space-y-3">
             <p className="text-xs font-medium text-muted-foreground">添加新来源</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <input
-                className="px-3 py-2 rounded-md border border-input bg-background text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              <Input
                 placeholder="名称（如 my-repo）"
                 value={newSource.name || ""}
                 onChange={(e) => setNewSource({ ...newSource, name: e.target.value })}
               />
               <div className="flex gap-2">
-                <input
-                  className="flex-1 px-3 py-2 rounded-md border border-input bg-background text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                <Input
+                  className="flex-1"
                   placeholder="URL（GitHub 地址或本地路径）"
                   value={newSource.url || ""}
                   onChange={(e) => setNewSource({ ...newSource, url: e.target.value })}
@@ -332,8 +390,7 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
                 <option value="registry">开放市场 (registry)</option>
               </select>
               {newSource.type === "github" && (
-                <input
-                  className="px-3 py-2 rounded-md border border-input bg-background text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                <Input
                   placeholder="分支（默认 main）"
                   value={newSource.branch || "main"}
                   onChange={(e) => setNewSource({ ...newSource, branch: e.target.value })}
@@ -344,12 +401,6 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
               <p className="text-xs text-destructive flex items-center gap-1">
                 <AlertCircle className="h-3 w-3" />
                 {sourceValidation}
-              </p>
-            )}
-            {sourcesMsg && (
-              <p className={`text-xs flex items-center gap-1 ${sourcesMsg.startsWith("✓") ? "text-green-600" : "text-destructive"}`}>
-                {sourcesMsg.startsWith("✓") ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
-                {sourcesMsg.replace(/^[✓✗]\s*/, "")}
               </p>
             )}
             <div className="flex justify-end">
@@ -363,7 +414,7 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
       </Card>
 
       {/* Agents Detection */}
-      <Card>
+      <Card className="border-t pt-6">
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>{t("settings.agents")}</CardTitle>
           <Button variant="outline" size="sm" onClick={onRefresh}>
@@ -419,6 +470,46 @@ export default function SettingsPage({ agents, onRefresh }: Props) {
             </>
           )}
         </CardContent>
+      </Card>
+
+      {/* Operation Logs */}
+      <Card className="border-t pt-6">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            <ScrollText className="h-4 w-4" />
+            操作日志
+          </CardTitle>
+          <Button variant="outline" size="sm" onClick={handleLoadLogs} disabled={loadingLogs}>
+            <RefreshCw className={`h-4 w-4 ${loadingLogs ? "animate-spin" : ""}`} />
+            {showLogs ? "收起" : "查看日志"}
+          </Button>
+        </CardHeader>
+        {showLogs && (
+          <CardContent>
+            {opLogs.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">暂无操作日志</p>
+            ) : (
+              <div className="space-y-1.5 max-h-96 overflow-y-auto">
+                {opLogs.slice().reverse().map((log, i) => (
+                  <div key={i} className={`text-xs font-mono px-2 py-1.5 rounded border ${log.success ? "border-green-100 bg-green-50/30" : "border-red-100 bg-red-50/30"}`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground shrink-0">{new Date(log.timestamp).toLocaleString("zh-CN")}</span>
+                      <Badge variant={log.success ? "default" : "destructive"} className="text-[10px] px-1.5 py-0">
+                        {log.operation}
+                      </Badge>
+                      <span className="font-medium">{log.target}</span>
+                      {log.agents && <span className="text-muted-foreground">→ {log.agents}</span>}
+                    </div>
+                    <div className="text-muted-foreground mt-0.5">{log.detail}</div>
+                    {log.storePath && <div className="text-blue-600 mt-0.5">存储: {log.storePath}</div>}
+                    {log.source && <div className="text-muted-foreground mt-0.5">来源: {log.source}</div>}
+                    {log.error && <div className="text-red-600 mt-0.5">错误: {log.error}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        )}
       </Card>
     </div>
   );

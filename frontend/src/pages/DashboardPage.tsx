@@ -1,4 +1,4 @@
-import { Puzzle, Users, Package, Database } from "lucide-react";
+import { Puzzle, Users, Package, Database, Search, FolderOpen } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -9,6 +9,7 @@ interface Props {
   skills: ListedSkill[];
   agents: AgentInfo[];
   onNavigate: (skill: ListedSkill) => void;
+  onNavigatePage?: (page: string) => void;
 }
 
 function groupAgentsByPath(agents: AgentInfo[]): AgentGroup[] {
@@ -37,7 +38,7 @@ function groupAgentsByPath(agents: AgentInfo[]): AgentGroup[] {
   return Array.from(groups.values());
 }
 
-export default function DashboardPage({ skills, agents, onNavigate }: Props) {
+export default function DashboardPage({ skills, agents, onNavigate, onNavigatePage }: Props) {
   const { t } = useI18n();
   const detectedCount = agents.filter(a => a.detected).length;
   const inPoolCount = skills.filter(s => s.inPool).length;
@@ -60,8 +61,8 @@ export default function DashboardPage({ skills, agents, onNavigate }: Props) {
 
       {/* Stats Grid */}
       <div className="grid grid-cols-4 gap-4">
-        {statCards.map((s) => (
-          <Card key={s.label}>
+        {statCards.map((s, i) => (
+          <Card key={s.label} className={i === 0 ? "border-l-4 border-l-blue-500" : ""}>
             <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
               <CardTitle className="text-sm font-medium">{s.label}</CardTitle>
               <div className={`p-2 rounded-md ${s.color}`}>
@@ -69,7 +70,7 @@ export default function DashboardPage({ skills, agents, onNavigate }: Props) {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{s.value}</div>
+              <div className={i === 0 ? "text-3xl font-bold" : "text-2xl font-bold"}>{s.value}</div>
             </CardContent>
           </Card>
         ))}
@@ -82,7 +83,23 @@ export default function DashboardPage({ skills, agents, onNavigate }: Props) {
         </CardHeader>
         <CardContent>
           {skills.length === 0 ? (
-            <p className="text-muted-foreground text-sm py-4 text-center">暂无技能数据</p>
+            <div className="py-8 text-center space-y-3">
+              <p className="text-muted-foreground text-sm">暂无技能数据</p>
+              <div className="flex justify-center gap-3">
+                {onNavigatePage && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => onNavigatePage("market")}>
+                      <Search className="h-4 w-4 mr-1" />
+                      去市场搜索
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => onNavigatePage("pool")}>
+                      <FolderOpen className="h-4 w-4 mr-1" />
+                      扫描本地技能
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
           ) : (
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full text-sm">

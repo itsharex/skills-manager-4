@@ -98,6 +98,7 @@ export default function AgentSelector({ onSelectionChange, initialSelection }: P
   }, []);
 
   // Restore selection from localStorage + initialSelection
+  // Default: empty selection — user must explicitly choose target agents
   useEffect(() => {
     if (restored || loading) return;
 
@@ -115,9 +116,12 @@ export default function AgentSelector({ onSelectionChange, initialSelection }: P
       ids = initialSelection;
     }
 
+    // No auto-select: user must explicitly choose which agents to install to
+
     if (ids) {
       setSelectedIds(new Set(ids));
       onSelectionChange(ids);
+      saveSelection(ids);
     }
 
     setRestored(true);

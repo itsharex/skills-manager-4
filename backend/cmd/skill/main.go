@@ -34,7 +34,7 @@ AI agent skills from multiple sources (GitHub, HTTP registries, local files).`,
 		SilenceUsage:      true,
 	}
 
-	rootCmd.PersistentFlags().String("repo", operations.DefaultRepoPath(), "Repo root path")
+	rootCmd.PersistentFlags().String("pool", operations.DefaultPoolPath(), "Pool root path")
 	rootCmd.PersistentFlags().Bool("copy", false, "Force copy mode instead of symlinks")
 	rootCmd.PersistentFlags().Bool("verbose", false, "Verbose output")
 
@@ -59,22 +59,22 @@ AI agent skills from multiple sources (GitHub, HTTP registries, local files).`,
 	return cli
 }
 
-// initRepo initializes or loads the repo state before each command.
+// initRepo initializes or loads the pool state before each command.
 func (cli *CLI) initRepo(cmd *cobra.Command, args []string) error {
-	repoPath, _ := cmd.Flags().GetString("repo")
+	poolPath, _ := cmd.Flags().GetString("pool")
 	forceCopy, _ := cmd.Flags().GetBool("copy")
 	verbose, _ := cmd.Flags().GetBool("verbose")
 
 	if verbose {
-		fmt.Fprintf(os.Stderr, "Using repo: %s\n", repoPath)
+		fmt.Fprintf(os.Stderr, "Using pool: %s\n", poolPath)
 	}
 
-	// Ensure repo exists
-	if err := operations.EnsureRepoDir(repoPath); err != nil {
-		return fmt.Errorf("ensure repo: %w", err)
+	// Ensure pool exists
+	if err := operations.EnsurePoolDir(poolPath); err != nil {
+		return fmt.Errorf("ensure pool: %w", err)
 	}
 
-	paths := operations.GetRepoPaths(repoPath)
+	paths := operations.GetPoolPaths(poolPath)
 
 	// Load config
 	cfg, err := operations.LoadConfig(paths.ConfigPath)
@@ -83,7 +83,7 @@ func (cli *CLI) initRepo(cmd *cobra.Command, args []string) error {
 	}
 
 	// Initialize storage
-	repo := storage.NewRepository(repoPath)
+	repo := storage.NewRepository(poolPath)
 	idx, err := storage.NewIndex(paths.IndexPath)
 	if err != nil {
 		return fmt.Errorf("init index: %w", err)

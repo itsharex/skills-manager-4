@@ -17,29 +17,30 @@ type HealthCheckResult struct {
 
 // HealthReport aggregates all diagnostic checks.
 type HealthReport struct {
-	RepoPath string             `json:"repo_path"`
+	PoolPath string             `json:"pool_path"`
 	Checks   []HealthCheckResult `json:"checks"`
 	AllPass  bool               `json:"all_pass"`
 }
 
 // RunDoctor runs all diagnostic checks and returns a health report.
-func RunDoctor(root string) *HealthReport {
+func RunDoctor(poolPath string) *HealthReport {
 	report := &HealthReport{
-		RepoPath: root,
+		PoolPath: poolPath,
 		Checks:   make([]HealthCheckResult, 0),
 		AllPass:  true,
 	}
 
-	paths := GetRepoPaths(root)
+	paths := GetPoolPaths(poolPath)
 
-	report.Checks = append(report.Checks, checkRepoRoot(root))
+	report.Checks = append(report.Checks, checkPoolRoot(poolPath))
 	report.Checks = append(report.Checks, checkSkillsDir(paths.SkillsDir))
+	report.Checks = append(report.Checks, checkMetaDir(paths.MetaDir))
 	report.Checks = append(report.Checks, checkFileExists("index.json", paths.IndexPath))
 	report.Checks = append(report.Checks, checkFileExists("lock.json", paths.LockPath))
 	report.Checks = append(report.Checks, checkFileExists("config.json", paths.ConfigPath))
 	report.Checks = append(report.Checks, checkConfigValid(paths.ConfigPath))
 	report.Checks = append(report.Checks, checkBrokenSymlinks(paths.SkillsDir))
-	report.Checks = append(report.Checks, checkDiskSpace(root))
+	report.Checks = append(report.Checks, checkDiskSpace(poolPath))
 
 	for _, c := range report.Checks {
 		if c.Status == "fail" {
@@ -51,28 +52,28 @@ func RunDoctor(root string) *HealthReport {
 	return report
 }
 
-// checkRepoRoot validates that the repo root directory exists.
-func checkRepoRoot(root string) HealthCheckResult {
+// checkPoolRoot validates that the pool root directory exists.
+func checkPoolRoot(root string) HealthCheckResult {
 	info, err := os.Stat(root)
 	if os.IsNotExist(err) {
 		return HealthCheckResult{
-			Name: "repo_root", Status: "fail",
-			Message: fmt.Sprintf("Repository root does not exist: %s", root),
+			Name: "pool_root", Status: "fail",
+			Message: fmt.Sprintf("Pool root does not exist: %s", root),
 		}
 	}
 	if err != nil {
 		return HealthCheckResult{
-			Name: "repo_root", Status: "fail",
-			Message: fmt.Sprintf("Cannot access repo root: %v", err),
+			Name: "pool_root", Status: "fail",
+			Message: fmt.Sprintf("Cannot access pool root: %v", err),
 		}
 	}
 	if !info.IsDir() {
 		return HealthCheckResult{
-			Name: "repo_root", Status: "fail",
-			Message: fmt.Sprintf("Repo root is not a directory: %s", root),
+			Name: "pool_root", Status: "fail",
+			Message: fmt.Sprintf("Pool root is not a directory: %s", root),
 		}
 	}
-	return HealthCheckResult{Name: "repo_root", Status: "pass", Message: "OK"}
+	return HealthCheckResult{Name: "pool_root", Status: "pass", Message: "OK"}
 }
 
 // checkSkillsDir validates the skills storage directory.
@@ -97,6 +98,30 @@ func checkSkillsDir(skillsDir string) HealthCheckResult {
 		}
 	}
 	return HealthCheckResult{Name: "skills_dir", Status: "pass"}
+}
+
+// checkMetaDir validates that the .meta directory exists.
+func checkMetaDir(metaDir string) HealthCheckResult {
+	info, err := os.Stat(metaDir)
+	if os.IsNotExist(err) {
+		return HealthCheckResult{
+			Name: "meta_dir", Status: "warn",
+			Message: fmt.Sprintf("Meta directory does not exist (will be created on first write): %s", metaDir),
+		}
+	}
+	if err != nil {
+		return HealthCheckResult{
+			Name: "meta_dir", Status: "fail",
+			Message: fmt.Sprintf("Cannot access meta directory: %v", err),
+		}
+	}
+	if !info.IsDir() {
+		return HealthCheckResult{
+			Name: "meta_dir", Status: "fail",
+			Message: fmt.Sprintf("Meta path is not a directory: %s", metaDir),
+		}
+	}
+	return HealthCheckResult{Name: "meta_dir", Status: "pass"}
 }
 
 // checkFileExists checks that a specific file exists.
@@ -126,10 +151,10 @@ func checkConfigValid(configPath string) HealthCheckResult {
 			Message: fmt.Sprintf("Config load failed: %v", err),
 		}
 	}
-	if cfg.RepoPath == "" {
+	if cfg.PoolPath == "" {
 		return HealthCheckResult{
 			Name: "config_valid", Status: "warn",
-			Message: "Repo path is empty in config",
+			Message: "Pool path is empty in config",
 		}
 	}
 	return HealthCheckResult{Name: "config_valid", Status: "pass"}
@@ -176,7 +201,7 @@ func checkDiskSpace(root string) HealthCheckResult {
 	if err := os.WriteFile(tmpFile, []byte("ok"), 0o644); err != nil {
 		return HealthCheckResult{
 			Name: "disk_space", Status: "fail",
-			Message: fmt.Sprintf("Cannot write to repo directory: %v", err),
+			Message: fmt.Sprintf("Cannot write to pool directory: %v", err),
 		}
 	}
 	os.Remove(tmpFile)

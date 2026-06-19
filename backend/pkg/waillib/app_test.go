@@ -76,8 +76,8 @@ func TestApp_GetConfig(t *testing.T) {
 		if cfg.InstallMode != "symlink" && cfg.InstallMode != "copy" {
 			t.Errorf("unexpected InstallMode: %q", cfg.InstallMode)
 		}
-		if cfg.RepoPath == "" {
-			t.Error("expected non-empty RepoPath")
+		if cfg.PoolPath == "" {
+			t.Error("expected non-empty PoolPath")
 		}
 	}
 }
@@ -152,8 +152,8 @@ func TestApp_RunDoctor(t *testing.T) {
 	// Should not panic - handles default repo path gracefully
 	report := app.RunDoctor()
 
-	if report.RepoPath == "" {
-		t.Error("expected non-empty RepoPath in health report")
+	if report.PoolPath == "" {
+		t.Error("expected non-empty PoolPath in health report")
 	}
 	// Checks should be present but may have failures since repo doesn't exist
 	if len(report.Checks) == 0 {
@@ -631,7 +631,7 @@ func TestApp_SaveConfig_APIContract(t *testing.T) {
 	// The SaveConfig method should accept a config and not panic
 	// (actual persistence is tested in operations/config_test.go)
 	cfg := models.Config{
-		RepoPath:    "/tmp/test-repo",
+		PoolPath:    "/tmp/test-pool",
 		InstallMode: "symlink",
 		MarketSources: []models.MarketSource{
 			{Name: "test-source", URL: "/tmp/pool", Type: "pool", Enabled: true},
@@ -918,14 +918,16 @@ func TestApp_ScanProjectPool_WithMatchingSkills(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	// Create directories under tmpDir matching agent skill names with SKILL.md
+	// Create directories under a known agent project subdir with SKILL.md
+	// scanProjectPool only looks in standard agent subdirectories like .claude/skills/
+	agentSubdir := ".claude/skills"
 	created := 0
 	limit := 3
 	for _, s := range globalSkills {
 		if created >= limit {
 			break
 		}
-		candidatePath := filepath.Join(tmpDir, s.Name)
+		candidatePath := filepath.Join(tmpDir, agentSubdir, s.Name)
 		if err := os.MkdirAll(candidatePath, 0755); err != nil {
 			continue
 		}
@@ -943,9 +945,7 @@ func TestApp_ScanProjectPool_WithMatchingSkills(t *testing.T) {
 	// Scan the project path
 	results := app.ScanLocal(tmpDir)
 
-	// scanProjectPool returns all skills found, AlreadyInPool may be true
-	// if the skill name exists in the real pool directory.
-	// We only verify all results have valid names and paths.
+	// scanProjectPool returns all skills found in agent project subdirs
 	if len(results) == 0 {
 		t.Fatal("scanProjectPool returned no results")
 	}
@@ -956,8 +956,9 @@ func TestApp_ScanProjectPool_WithMatchingSkills(t *testing.T) {
 		if r.Path == "" {
 			t.Errorf("scanProjectPool returned skill %q with empty Path", r.Name)
 		}
-		if r.Path != filepath.Join(tmpDir, r.Name) {
-			t.Errorf("scanProjectPool returned skill %q with unexpected Path %q", r.Name, r.Path)
+		// Path should be under an agent project subdir, not directly under tmpDir
+		if r.AgentID == "" {
+			t.Errorf("scanProjectPool returned skill %q with empty AgentID", r.Name)
 		}
 	}
 

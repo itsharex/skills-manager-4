@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import { RefreshCw, Search, Loader2, Puzzle, CheckCircle2, FolderOpen, Download, Archive, CheckSquare, Square } from "lucide-react";
+import { toast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { scanLocal, listPool, getConfig, importToPool, archiveToPool, openDirectoryDialog } from "../bridge";
 import type { ListedSkill, DiscoveredSkill } from "../types";
 
@@ -26,7 +28,6 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
 
   // Action state
   const [importing, setImporting] = useState(false);
-  const [actionMsg, setActionMsg] = useState<{ skill: string; success: boolean; msg: string } | null>(null);
 
   // Multi-select state for "not in pool" skills
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -59,7 +60,6 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
   const handleScan = async () => {
     setScanning(true);
     setScanError(null);
-    setActionMsg(null);
     try {
       const res = await scanLocal(projectPath.trim() || undefined);
       setScanResults(res);
@@ -83,15 +83,14 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
 
   const handleImport = async (skill: DiscoveredSkill) => {
     setImporting(true);
-    setActionMsg(null);
     try {
       await importToPool(skill.path);
-      setActionMsg({ skill: skill.name, success: true, msg: `"${skill.name}" 已复制到技能池` });
+      toast.success(`"${skill.name}" 已复制到技能池`);
       await reloadPool();
       setScanResults(prev => prev.filter(s => s.path !== skill.path));
       onRefresh();
     } catch (e: any) {
-      setActionMsg({ skill: skill.name, success: false, msg: `复制失败: ${e.message}` });
+      toast.error(`复制失败: ${e.message}`);
     } finally {
       setImporting(false);
     }
@@ -99,15 +98,14 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
 
   const handleArchive = async (skill: DiscoveredSkill) => {
     setImporting(true);
-    setActionMsg(null);
     try {
       await archiveToPool(skill.path);
-      setActionMsg({ skill: skill.name, success: true, msg: `"${skill.name}" 已归档到技能池（原目录已移除）` });
+      toast.success(`"${skill.name}" 已归档到技能池（原目录已移除）`);
       await reloadPool();
       setScanResults(prev => prev.filter(s => s.path !== skill.path));
       onRefresh();
     } catch (e: any) {
-      setActionMsg({ skill: skill.name, success: false, msg: `归档失败: ${e.message}` });
+      toast.error(`归档失败: ${e.message}`);
     } finally {
       setImporting(false);
     }
@@ -127,7 +125,6 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
   const handleBatchImport = async () => {
     if (selectedPaths.size === 0) return;
     setImporting(true);
-    setActionMsg(null);
     let successCount = 0;
     let failCount = 0;
     for (const path of selectedPaths) {
@@ -138,11 +135,7 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
         failCount++;
       }
     }
-    setActionMsg({
-      skill: "batch",
-      success: failCount === 0,
-      msg: `批量入库完成：${successCount} 个成功${failCount > 0 ? `，${failCount} 个失败` : ""}`,
-    });
+    toast[failCount === 0 ? "success" : "error"](`批量入库完成：${successCount} 个成功${failCount > 0 ? `，${failCount} 个失败` : ""}`);
     setSelectedPaths(new Set());
     await reloadPool();
     onRefresh();
@@ -153,7 +146,6 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
   const handleBatchArchive = async () => {
     if (selectedPaths.size === 0) return;
     setImporting(true);
-    setActionMsg(null);
     let successCount = 0;
     let failCount = 0;
     for (const path of selectedPaths) {
@@ -164,11 +156,7 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
         failCount++;
       }
     }
-    setActionMsg({
-      skill: "batch",
-      success: failCount === 0,
-      msg: `批量归档完成：${successCount} 个成功${failCount > 0 ? `，${failCount} 个失败` : ""}`,
-    });
+    toast[failCount === 0 ? "success" : "error"](`批量归档完成：${successCount} 个成功${failCount > 0 ? `，${failCount} 个失败` : ""}`);
     setSelectedPaths(new Set());
     await reloadPool();
     onRefresh();
@@ -196,17 +184,6 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
         </Button>
       </div>
 
-      {actionMsg && (
-        <Card>
-          <CardContent className="py-3">
-            <p className={`text-sm flex items-center gap-2 ${actionMsg.success ? "text-green-600" : "text-destructive"}`}>
-              {actionMsg.success ? <CheckCircle2 className="h-4 w-4" /> : null}
-              {actionMsg.msg}
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
       {/* Section 1: Pool Skills Summary */}
       <Card>
         <CardHeader>
@@ -229,8 +206,8 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {inPoolSkills.map((s, idx) => (
-                    <tr key={s.name} className={`border-b last:border-0 hover:bg-muted/30 cursor-pointer ${idx % 2 === 1 ? "bg-muted/[0.03]" : ""}`} onClick={() => onSelect(s)}>
+                  {inPoolSkills.map((s) => (
+                    <tr key={s.name} className={`border-b last:border-0 hover:bg-muted/30 cursor-pointer`} onClick={() => onSelect(s)}>
                       <td className="px-4 py-2 font-medium flex items-center gap-2">
                         <Puzzle className="h-3.5 w-3.5 text-primary shrink-0" />
                         {s.name}
@@ -380,8 +357,8 @@ export default function SkillsPage({ skills, onSelect, onRefresh }: Props) {
             递归扫描指定目录下所有子目录，寻找包含 SKILL.md 的技能定义。
           </p>
           <div className="flex gap-2">
-            <input
-              className="flex-1 px-3 py-2 rounded-md border border-input bg-background text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            <Input
+              className="flex-1"
               placeholder="选择要扫描的目录（可选，留空则扫描所有智能体全局目录）"
               value={projectPath}
               onChange={(e) => setProjectPath(e.target.value)}

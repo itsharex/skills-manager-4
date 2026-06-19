@@ -70,6 +70,34 @@ build_macos() {
 
     cp "$output" "$app_bundle/Contents/MacOS/$APP_NAME"
 
+    # Generate .icns from asklogo.png
+    ICON_SRC="$SCRIPT_DIR/asklogo.png"
+    if [ -f "$ICON_SRC" ]; then
+        log_info "生成应用图标 (.icns)..."
+        ICONSET_DIR="$BUILD_DIR/icon.iconset"
+        rm -rf "$ICONSET_DIR"
+        mkdir -p "$ICONSET_DIR"
+
+        # Generate all required icon sizes using sips
+        sips -z 16 16     "$ICON_SRC" --out "$ICONSET_DIR/icon_16x16.png"     >/dev/null 2>&1
+        sips -z 32 32     "$ICON_SRC" --out "$ICONSET_DIR/icon_16x16@2x.png"  >/dev/null 2>&1
+        sips -z 32 32     "$ICON_SRC" --out "$ICONSET_DIR/icon_32x32.png"     >/dev/null 2>&1
+        sips -z 64 64     "$ICON_SRC" --out "$ICONSET_DIR/icon_32x32@2x.png"  >/dev/null 2>&1
+        sips -z 128 128   "$ICON_SRC" --out "$ICONSET_DIR/icon_128x128.png"   >/dev/null 2>&1
+        sips -z 256 256   "$ICON_SRC" --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null 2>&1
+        sips -z 256 256   "$ICON_SRC" --out "$ICONSET_DIR/icon_256x256.png"   >/dev/null 2>&1
+        sips -z 512 512   "$ICON_SRC" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null 2>&1
+        sips -z 512 512   "$ICON_SRC" --out "$ICONSET_DIR/icon_512x512.png"   >/dev/null 2>&1
+        sips -z 1024 1024 "$ICON_SRC" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null 2>&1
+
+        iconutil -c icns "$ICONSET_DIR" -o "$BUILD_DIR/iconfile.icns"
+        cp "$BUILD_DIR/iconfile.icns" "$app_bundle/Contents/Resources/iconfile.icns"
+        rm -rf "$ICONSET_DIR" "$BUILD_DIR/iconfile.icns"
+        log_info "图标已打包到 .app Bundle"
+    else
+        log_warn "未找到图标文件: $ICON_SRC，跳过图标打包"
+    fi
+
     cat > "$app_bundle/Contents/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -89,6 +117,8 @@ build_macos() {
     <string>${VERSION}</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>iconfile</string>
     <key>LSMinimumSystemVersion</key>
     <string>10.15</string>
     <key>NSHighResolutionCapable</key>
@@ -98,6 +128,37 @@ build_macos() {
 </dict>
 </plist>
 PLIST
+
+    # Self-sign the app bundle (required for macOS to display icon and pass Gatekeeper)
+    codesign --force --sign - "$app_bundle" 2>/dev/null && log_info "应用已自签名" || log_warn "自签名失败（不影响运行，但可能影响图标显示）"
+
+    # Force macOS to recognize the new icon by clearing ALL relevant caches.
+    # This is necessary because macOS LaunchServices aggressively caches icons by
+    # bundle identifier, and simply rebuilding the .app at the same path does NOT
+    # refresh the icon. This has been a recurring issue — we must clear caches
+    # thoroughly every build to prevent "missing icon" reports.
+    log_info "清理 macOS 图标缓存..."
+
+    # 1. Unregister old entry (suppress errors if not registered yet)
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$app_bundle" 2>/dev/null || true
+
+    # 2. Re-register the new build
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app_bundle" 2>/dev/null && log_info "已注册到 LaunchServices" || log_warn "LaunchServices 注册失败"
+
+    # 3. Clear the icon cache for this bundle identifier explicitly
+    # The iconservices_agent caches icons separately from LaunchServices
+    killall IconServicesAgent 2>/dev/null || true
+
+    # 4. Restart Dock to pick up the new icon
+    killall Dock 2>/dev/null && log_info "已刷新 Dock 图标缓存" || true
+
+    # 5. Touch the app bundle to update modification date (helps cache invalidation)
+    touch "$app_bundle"
+
+    log_info "图标缓存清理完成（首次打开可能需要几秒加载图标）"
+
+    # Remove raw binary - only keep the .app bundle
+    rm -f "$output"
 
     log_info "macOS App Bundle: $app_bundle"
 }

@@ -15,8 +15,14 @@ func TestNewRepository(t *testing.T) {
 	if r.Root != root {
 		t.Errorf("expected Root %q, got %q", root, r.Root)
 	}
-	if r.Paths.SkillsDir != filepath.Join(root, "skills") {
-		t.Errorf("expected SkillsDir %q, got %q", filepath.Join(root, "skills"), r.Paths.SkillsDir)
+	if r.Paths.SkillsDir != root {
+		t.Errorf("expected SkillsDir %q, got %q", root, r.Paths.SkillsDir)
+	}
+	if r.Paths.MetaDir != filepath.Join(root, ".meta") {
+		t.Errorf("expected MetaDir %q, got %q", filepath.Join(root, ".meta"), r.Paths.MetaDir)
+	}
+	if r.Paths.IndexPath != filepath.Join(root, ".meta", "index.json") {
+		t.Errorf("expected IndexPath %q, got %q", filepath.Join(root, ".meta", "index.json"), r.Paths.IndexPath)
 	}
 }
 
@@ -25,7 +31,7 @@ func TestSkillPath(t *testing.T) {
 	r := NewRepository(root)
 
 	path := r.SkillPath("github.com/owner", "my-skill", "1.0.0")
-	expected := filepath.Join(root, "skills", "github.com/owner", "my-skill@1.0.0")
+	expected := filepath.Join(root, "my-skill")
 	if path != expected {
 		t.Errorf("expected %q, got %q", expected, path)
 	}
@@ -56,7 +62,7 @@ func TestStore_Directory(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	expectedDest := filepath.Join(root, "skills", "github.com/test", "test-skill@0.1.0")
+	expectedDest := filepath.Join(root, "test-skill")
 	if dest != expectedDest {
 		t.Errorf("expected dest %q, got %q", expectedDest, dest)
 	}
@@ -134,38 +140,15 @@ func TestUpdateLatest(t *testing.T) {
 	root := t.TempDir()
 	r := NewRepository(root)
 
-	// Create a version directory
+	// Create a skill directory
 	versionDir := r.SkillPath("github.com/test", "my-skill", "1.0.0")
 	if err := os.MkdirAll(versionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
+	// UpdateLatest is a no-op in flat layout, should not error
 	if err := r.UpdateLatest("github.com/test", "my-skill", "1.0.0"); err != nil {
 		t.Fatalf("UpdateLatest failed: %v", err)
-	}
-
-	// Verify symlink
-	latestPath := filepath.Join(root, "skills", "github.com/test", "my-skill@latest")
-	target, err := os.Readlink(latestPath)
-	if err != nil {
-		t.Fatalf("read latest symlink: %v", err)
-	}
-	if target != "my-skill@1.0.0" {
-		t.Errorf("expected symlink target 'my-skill@1.0.0', got %q", target)
-	}
-
-	// Update to a different version
-	versionDir2 := r.SkillPath("github.com/test", "my-skill", "2.0.0")
-	if err := os.MkdirAll(versionDir2, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.UpdateLatest("github.com/test", "my-skill", "2.0.0"); err != nil {
-		t.Fatalf("UpdateLatest to 2.0.0 failed: %v", err)
-	}
-
-	target2, _ := os.Readlink(latestPath)
-	if target2 != "my-skill@2.0.0" {
-		t.Errorf("expected symlink target 'my-skill@2.0.0', got %q", target2)
 	}
 }
 
@@ -173,9 +156,10 @@ func TestUpdateLatest_VersionNotExist(t *testing.T) {
 	root := t.TempDir()
 	r := NewRepository(root)
 
+	// UpdateLatest is a no-op in flat layout, even for non-existent version
 	err := r.UpdateLatest("github.com/test", "my-skill", "0.0.0")
-	if err == nil {
-		t.Fatal("expected error for non-existent version")
+	if err != nil {
+		t.Errorf("UpdateLatest should be no-op even for non-existent version: %v", err)
 	}
 }
 
@@ -196,21 +180,28 @@ func TestListSkills_WithSkills(t *testing.T) {
 	root := t.TempDir()
 	r := NewRepository(root)
 
-	// Create some skill directories
-	dirs := []struct {
-		ns, name, version string
-	}{
-		{"github.com/user1", "skill-a", "1.0.0"},
-		{"github.com/user1", "skill-a", "1.1.0"},
-		{"github.com/user2", "skill-b", "0.5.0"},
-		{"local", "my-skill", "2.0.0"},
-	}
-
-	for _, d := range dirs {
-		p := r.SkillPath(d.ns, d.name, d.version)
+	// Create some skill directories with SKILL.md (flat layout)
+	skillNames := []string{"skill-a", "skill-b", "my-skill"}
+	for _, name := range skillNames {
+		p := filepath.Join(root, name)
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(p, "SKILL.md"), []byte("# "+name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Create a directory without SKILL.md (should be skipped)
+	emptyDir := filepath.Join(root, "empty-skill")
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .meta directory (should be skipped)
+	metaDir := filepath.Join(root, ".meta")
+	if err := os.MkdirAll(metaDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
 
 	skills, err := r.ListSkills()
@@ -218,8 +209,8 @@ func TestListSkills_WithSkills(t *testing.T) {
 		t.Fatalf("ListSkills failed: %v", err)
 	}
 
-	if len(skills) != 4 {
-		t.Fatalf("expected 4 skills, got %d: %v", len(skills), skills)
+	if len(skills) != 3 {
+		t.Fatalf("expected 3 skills, got %d: %v", len(skills), skills)
 	}
 }
 

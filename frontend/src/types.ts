@@ -3,6 +3,7 @@ export interface ListedSkill {
   agentIds: string[];
   agentNames: string[];
   paths: string[];
+  storePath?: string; // pool storage path (e.g. ~/.skill-pool/<name>/)
   latest: string;
   versions: string[] | null;
   description: string;
@@ -14,11 +15,11 @@ export interface AgentInfo {
   name: string;
   path: string;
   skillsDir: string;
+  projectSkillsSubdir: string;
   detected: boolean;
 }
 
 export interface Config {
-  repo_path: string;
   pool_path: string;
   install_mode: string;
   auto_fallback: boolean;
@@ -27,6 +28,7 @@ export interface Config {
   link_targets: LinkTarget[];
   repositories: RepoSource[];
   cache_ttl: number;
+  github_token: string;
 }
 
 export interface MarketSource {
@@ -68,7 +70,7 @@ export interface InstallResult {
 }
 
 export interface HealthReport {
-  repo_path: string;
+  pool_path: string;
   checks: HealthCheck[];
   all_pass: boolean;
 }
@@ -114,11 +116,24 @@ export interface MarketSearchResult {
   error?: string;
 }
 
+export interface OpLog {
+  timestamp: string;
+  operation: string;
+  target: string;
+  detail: string;
+  source: string;
+  storePath: string;
+  agents: string;
+  success: boolean;
+  error?: string;
+}
+
 export interface MarketSearchSkill {
   name: string;
   namespace: string;
   version: string;
   description: string;
-  source: string; // owner/repo for GitHub, owner/slug for ClawHub
+  source: string; // owner/repo for GitHub, owner/slug for ClawHub, owner/repo/slug for skills.sh
+  localPath?: string; // local filesystem path (for pool skills)
   installs?: number;
 }

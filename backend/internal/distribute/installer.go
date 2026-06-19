@@ -80,10 +80,17 @@ func (inst *Installer) Install(skill models.ResolvedSkill, opts InstallOptions) 
 
 	forceCopy := opts.ForceCopy || inst.ForceCopy
 
-	// Step 1: Store skill in repository
-	storePath, err := inst.Repo.Store(skill, namespace, version)
-	if err != nil {
-		return nil, fmt.Errorf("store skill: %w", err)
+	// Step 1: Copy skill to Pool path
+	poolPath := inst.Repo.Root // Repository.Root is now ~/.skill-pool/
+	storePath := filepath.Join(poolPath, skill.Name)
+
+	if _, err := os.Stat(storePath); err != nil {
+		if err := os.MkdirAll(poolPath, 0755); err != nil {
+			return nil, fmt.Errorf("create pool directory: %w", err)
+		}
+		if err := copyDir(skill.LocalPath, storePath); err != nil {
+			return nil, fmt.Errorf("copy skill to pool: %w", err)
+		}
 	}
 
 	// Step 2: Update index
@@ -99,7 +106,7 @@ func (inst *Installer) Install(skill models.ResolvedSkill, opts InstallOptions) 
 		Namespace:  namespace,
 		Versions:   versions,
 		Latest:     version,
-		Source:     skill.LocalPath,
+		Source:     storePath,
 		SourceType: namespace,
 		Tags:       nil,
 		Description: "",
@@ -186,8 +193,7 @@ func (inst *Installer) Uninstall(namespace, name, version string) error {
 	if err == nil {
 		// Step 2: Remove from agents
 		for _, agent := range lockEntry.Agents {
-			skillDirName := fmt.Sprintf("%s@%s", name, version)
-			if err := UnsyncSkillFromAgent(skillDirName, agent.AgentID); err != nil {
+			if err := UnsyncSkillFromAgent(name, agent.AgentID); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: remove from agent %s: %v\n", agent.AgentID, err)
 			}
 		}
@@ -228,9 +234,9 @@ func (inst *Installer) Uninstall(namespace, name, version string) error {
 		return fmt.Errorf("save index: %w", err)
 	}
 
-	// Step 5: Remove from repository
-	if err := inst.Repo.Remove(namespace, name, version); err != nil {
-		return fmt.Errorf("remove from repository: %w", err)
+	// Step 5: Remove from pool
+	if err := os.RemoveAll(filepath.Join(inst.Repo.Root, name)); err != nil {
+		return fmt.Errorf("remove from pool: %w", err)
 	}
 
 	return nil
@@ -253,19 +259,24 @@ func (inst *Installer) UpdateSkill(namespace, name, oldVersion, newVersion strin
 		}
 	}
 
-	// Step 1: Store new version first (before removing old, to ensure atomicity)
-	oldPath := inst.Repo.SkillPath(namespace, name, oldVersion)
-	oldModel := models.ResolvedSkill{
-		LocalPath: oldPath,
-		Namespace: namespace,
-		Name:      name,
-		Version:   newVersion,
+	// Step 1: Determine Pool path
+	poolPath := inst.Repo.Root
+	storePath := filepath.Join(poolPath, name)
+
+	// Remove old version from agents first
+	for _, agent := range lockEntry.Agents {
+		if err := UnsyncSkillFromAgent(name, agent.AgentID); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: remove old version from %s: %v\n", agent.AgentID, err)
+		}
 	}
 
-	newPath, err := inst.Repo.Store(oldModel, namespace, newVersion)
-	if err != nil {
-		return fmt.Errorf("store new version: %w", err)
+	// Remove old lock entries
+	for _, agent := range lockEntry.Agents {
+		inst.Lock.Untrack(oldLockKey, agent.AgentID)
 	}
+
+	// Remove old pool copy and re-copy from source
+	os.RemoveAll(storePath)
 
 	// Step 2: Update index — merge versions instead of replacing
 	indexKey := buildIndexKey(namespace, name)
@@ -284,7 +295,7 @@ func (inst *Installer) UpdateSkill(namespace, name, oldVersion, newVersion strin
 		Namespace:  namespace,
 		Versions:   versions,
 		Latest:     newVersion,
-		Source:     oldPath,
+		Source:     storePath,
 		SourceType: namespace,
 	}
 	inst.Index.Add(newEntry)
@@ -297,27 +308,9 @@ func (inst *Installer) UpdateSkill(namespace, name, oldVersion, newVersion strin
 		fmt.Fprintf(os.Stderr, "warning: update latest symlink: %v\n", err)
 	}
 
-	// Step 4: Remove old version from repo
-	if err := inst.Repo.Remove(namespace, name, oldVersion); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: remove old version: %v\n", err)
-	}
-
-	// Step 5: Remove old version from agents
-	oldDirName := fmt.Sprintf("%s@%s", name, oldVersion)
-	for _, agent := range lockEntry.Agents {
-		if err := UnsyncSkillFromAgent(oldDirName, agent.AgentID); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: remove old version from %s: %v\n", agent.AgentID, err)
-		}
-	}
-
-	// Step 6: Remove old lock entries
-	for _, agent := range lockEntry.Agents {
-		inst.Lock.Untrack(oldLockKey, agent.AgentID)
-	}
-
-	// Step 7: Sync new version to agents
+	// Step 4: Sync new version to agents
 	for _, agentID := range agents {
-		result, err := SyncSkillToAgent(newPath, agentID, forceCopy || inst.ForceCopy)
+		result, err := SyncSkillToAgent(storePath, agentID, forceCopy || inst.ForceCopy)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: sync to %s: %v\n", agentID, err)
 			continue
@@ -329,9 +322,9 @@ func (inst *Installer) UpdateSkill(namespace, name, oldVersion, newVersion strin
 				Version:   newVersion,
 			},
 			InstalledAt: time.Now().UTC().Format(time.RFC3339),
-			Source:      newPath,
+			Source:      storePath,
 			Agents: []models.LockAgentBinding{
-				{AgentID: agentID, Path: newPath, Mode: result.Mode},
+				{AgentID: agentID, Path: storePath, Mode: result.Mode},
 			},
 		}
 		inst.Lock.Track(lockEntry)
@@ -359,7 +352,7 @@ func (inst *Installer) CleanupStaleLinks() (int, error) {
 				continue
 			}
 
-			linkPath := filepath.Join(agentSkillsDir, fmt.Sprintf("%s@%s", entry.SkillID.Name, entry.SkillID.Version))
+			linkPath := filepath.Join(agentSkillsDir, entry.SkillID.Name)
 			broken, err := IsSymlinkBroken(linkPath)
 			if err != nil || !broken {
 				continue

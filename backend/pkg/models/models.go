@@ -7,17 +7,18 @@ type SkillID struct {
 	Version   string `json:"version"`
 }
 
-// Config - ~/.skill-repo/config.json
+// Config - ~/.skill-pool/.meta/config.json
 type Config struct {
-	RepoPath      string         `json:"repo_path"`      // default ~/.skill-repo/
-	PoolPath      string         `json:"pool_path"`      // local skill pool directory, default ~/.skill-pool/
-	InstallMode   string         `json:"install_mode"`   // "symlink" | "copy"
-	AutoFallback  bool           `json:"auto_fallback"`  // symlink fail -> copy
+	RepoPath      string         `json:"repo_path,omitempty"`  // Deprecated: use PoolPath
+	PoolPath      string         `json:"pool_path"`            // local skill pool directory, default ~/.skill-pool/
+	InstallMode   string         `json:"install_mode"`         // "symlink" | "copy"
+	AutoFallback  bool           `json:"auto_fallback"`        // symlink fail -> copy
 	DefaultAgents []string       `json:"default_agents"`
 	MarketSources []MarketSource `json:"market_sources"` // configured market/search sources
 	LinkTargets   []LinkTarget   `json:"link_targets"`
 	Repositories  []RepoSource   `json:"repositories"`
-	CacheTTL      int            `json:"cache_ttl"` // seconds
+	CacheTTL      int            `json:"cache_ttl"`    // seconds
+	GitHubToken   string         `json:"github_token"` // GitHub personal access token for API access
 }
 
 type MarketSource struct {
@@ -41,7 +42,7 @@ type RepoSource struct {
 	Enabled bool   `json:"enabled"`
 }
 
-// Index - ~/.skill-repo/index.json
+// Index - ~/.skill-pool/.meta/index.json
 type Index struct {
 	Version    int                   `json:"version"`
 	LastUpdate string                `json:"last_update"`
@@ -60,7 +61,7 @@ type IndexEntry struct {
 	Description   string   `json:"description"`
 }
 
-// LockFile - ~/.skill-repo/lock.json
+// LockFile - ~/.skill-pool/.meta/lock.json
 type LockFile struct {
 	Version int                 `json:"version"`
 	Skills  map[string]LockEntry `json:"skills"`
@@ -133,15 +134,34 @@ type MarketSearchSkill struct {
 	Namespace   string `json:"namespace"`
 	Version     string `json:"version"`
 	Description string `json:"description"`
-	Source      string `json:"source"` // owner/repo for GitHub, owner/slug for ClawHub
+	Source      string `json:"source"`               // owner/repo for GitHub, owner/slug for ClawHub, owner/repo/slug for skills.sh
+	LocalPath   string `json:"localPath,omitempty"`   // local filesystem path (for pool skills)
 	Installs    int    `json:"installs,omitempty"`
 }
 
-// RepoPaths helper
-type RepoPaths struct {
-	Root       string
-	SkillsDir  string // Root/skills/
-	IndexPath  string // Root/index.json
-	LockPath   string // Root/lock.json
-	ConfigPath string // Root/config.json
+// PoolPaths helper
+type PoolPaths struct {
+	PoolPath   string // ~/.skill-pool/
+	Root       string // alias for PoolPath (backward compat)
+	SkillsDir  string // PoolPath/ (skills directly under pool root)
+	MetaDir    string // PoolPath/.meta/
+	IndexPath  string // PoolPath/.meta/index.json
+	LockPath   string // PoolPath/.meta/lock.json
+	ConfigPath string // PoolPath/.meta/config.json
+}
+
+// Deprecated: Use PoolPaths instead.
+type RepoPaths = PoolPaths
+
+// OpLog represents a single operation log entry.
+type OpLog struct {
+	Timestamp string `json:"timestamp"`
+	Operation string `json:"operation"` // "install", "uninstall", "sync", "archive", "import", "delete"
+	Target    string `json:"target"`    // skill name or path
+	Detail    string `json:"detail"`    // human-readable detail
+	Source    string `json:"source"`    // where the skill came from
+	StorePath string `json:"storePath"` // where it was stored
+	Agents    string `json:"agents"`    // target agents (comma-separated)
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
 }

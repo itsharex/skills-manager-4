@@ -1,5 +1,5 @@
 // Bridge layer: wraps Wails-generated bindings with error handling.
-import type { ListedSkill, AgentInfo, Config, ResolvedSkill, InstallResult, HealthReport, SkillStats, DiscoveredSkill, MarketSearchResult } from "./types";
+import type { ListedSkill, AgentInfo, Config, ResolvedSkill, InstallResult, HealthReport, SkillStats, DiscoveredSkill, MarketSearchResult, OpLog } from "./types";
 
 let WailsApp: any = null;
 
@@ -91,6 +91,24 @@ export async function deleteSkill(skillPath: string): Promise<void> {
   await app.DeleteSkill(skillPath);
 }
 
+export async function deleteSkillFromPool(skillName: string): Promise<void> {
+  if (!hasWails()) throw new Error("Wails backend not available");
+  const app = await ensureWailsApp();
+  return app.DeleteSkillFromPool(skillName);
+}
+
+export async function deleteSkillFromAgent(skillPath: string): Promise<void> {
+  if (!hasWails()) throw new Error("Wails backend not available");
+  const app = await ensureWailsApp();
+  return app.DeleteSkillFromAgent(skillPath);
+}
+
+export async function deleteSkillFromProject(projectSkillPath: string): Promise<void> {
+  if (!hasWails()) throw new Error("Wails backend not available");
+  const app = await ensureWailsApp();
+  return app.DeleteSkillFromProject(projectSkillPath);
+}
+
 export async function archiveToPool(sourcePath: string): Promise<void> {
   if (!hasWails()) throw new Error("Wails backend not available");
   const app = await ensureWailsApp();
@@ -133,8 +151,26 @@ export async function installToProject(skillPath: string, projectPath: string, o
   await app.InstallToProject(skillPath, projectPath, overwrite);
 }
 
+export async function installToProjectForAgent(skillPath: string, projectPath: string, agentID: string, overwrite: boolean = false): Promise<void> {
+  if (!hasWails()) throw new Error("Wails backend not available");
+  const app = await ensureWailsApp();
+  await app.InstallToProjectForAgent(skillPath, projectPath, agentID, overwrite);
+}
+
 export async function searchMarket(keyword: string): Promise<MarketSearchResult[]> {
   if (!hasWails()) throw new Error("Wails backend not available");
   const app = await ensureWailsApp();
   return await app.SearchMarket(keyword) as MarketSearchResult[];
+}
+
+export async function installMarketSkill(skill: any, agentIDs: string[]): Promise<any[]> {
+  if (!hasWails()) throw new Error("Wails backend not available");
+  const app = await ensureWailsApp();
+  return await app.InstallMarketSkill(skill, agentIDs) as any[];
+}
+
+export async function getOpLogs(n: number): Promise<OpLog[]> {
+  if (!hasWails()) throw new Error("Wails backend not available");
+  const app = await ensureWailsApp();
+  return await app.GetOpLogs(n) as OpLog[];
 }

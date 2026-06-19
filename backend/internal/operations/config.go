@@ -5,17 +5,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/skillsmanager/skillsmanager/backend/pkg/models"
 )
 
-// DefaultRepoPath returns the default repo path (~/.skill-repo/)
-func DefaultRepoPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".skill-repo")
+// expandPath expands ~ to the user's home directory and cleans the path.
+func expandPath(path string) string {
+	if path == "" {
+		return path
 	}
-	return filepath.Join(home, ".skill-repo")
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		path = filepath.Join(home, path[2:])
+	} else if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		path = home
+	}
+	// Clean trailing slashes and resolve . or .. elements
+	return filepath.Clean(path)
 }
 
 // DefaultPoolPath returns the default local skill pool path (~/.skill-pool/)
@@ -27,11 +41,17 @@ func DefaultPoolPath() string {
 	return filepath.Join(home, ".skill-pool")
 }
 
+// Deprecated: Use DefaultPoolPath instead.
+func DefaultRepoPath() string {
+	return DefaultPoolPath()
+}
+
 // defaultConfig returns a Config with defaults filled in.
 func defaultConfig() *models.Config {
+	poolPath := DefaultPoolPath()
 	return &models.Config{
-		RepoPath:     DefaultRepoPath(),
-		PoolPath:     DefaultPoolPath(),
+		RepoPath:     poolPath,
+		PoolPath:     poolPath,
 		InstallMode:  "symlink",
 		AutoFallback: true,
 		CacheTTL:     3600,
@@ -54,12 +74,19 @@ func LoadConfig(path string) (*models.Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	// Apply defaults for zero-value fields
-	if cfg.RepoPath == "" {
-		cfg.RepoPath = DefaultRepoPath()
-	}
+	// Apply defaults for zero-value fields and expand ~ in paths
+	cfg.PoolPath = expandPath(cfg.PoolPath)
+	cfg.RepoPath = expandPath(cfg.RepoPath)
 	if cfg.PoolPath == "" {
-		cfg.PoolPath = DefaultPoolPath()
+		// Backward compat: if old config has repo_path but no pool_path
+		if cfg.RepoPath != "" {
+			cfg.PoolPath = cfg.RepoPath
+		} else {
+			cfg.PoolPath = DefaultPoolPath()
+		}
+	}
+	if cfg.RepoPath == "" {
+		cfg.RepoPath = cfg.PoolPath
 	}
 	if cfg.InstallMode == "" {
 		cfg.InstallMode = "symlink"
@@ -73,6 +100,10 @@ func LoadConfig(path string) (*models.Config, error) {
 
 // SaveConfig writes config to file.
 func SaveConfig(path string, cfg *models.Config) error {
+	// Clean paths before saving to avoid ~ or trailing slashes
+	cfg.PoolPath = expandPath(cfg.PoolPath)
+	cfg.RepoPath = expandPath(cfg.RepoPath)
+
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
@@ -90,23 +121,31 @@ func SaveConfig(path string, cfg *models.Config) error {
 	return nil
 }
 
-// GetRepoPaths returns all paths derived from repo root.
-func GetRepoPaths(root string) models.RepoPaths {
-	return models.RepoPaths{
-		Root:       root,
-		SkillsDir:  filepath.Join(root, "skills"),
-		IndexPath:  filepath.Join(root, "index.json"),
-		LockPath:   filepath.Join(root, "lock.json"),
-		ConfigPath: filepath.Join(root, "config.json"),
+// GetPoolPaths returns all paths derived from pool root.
+func GetPoolPaths(poolPath string) models.PoolPaths {
+	return models.PoolPaths{
+		PoolPath:   poolPath,
+		Root:       poolPath,
+		SkillsDir:  poolPath, // skills directly under pool root
+		MetaDir:    filepath.Join(poolPath, ".meta"),
+		IndexPath:  filepath.Join(poolPath, ".meta", "index.json"),
+		LockPath:   filepath.Join(poolPath, ".meta", "lock.json"),
+		ConfigPath: filepath.Join(poolPath, ".meta", "config.json"),
 	}
 }
 
-// EnsureRepoDir creates the repo directory structure.
-func EnsureRepoDir(root string) error {
-	paths := GetRepoPaths(root)
+// Deprecated: Use GetPoolPaths instead.
+func GetRepoPaths(root string) models.PoolPaths {
+	return GetPoolPaths(root)
+}
+
+// EnsurePoolDir creates the pool directory structure.
+func EnsurePoolDir(poolPath string) error {
+	paths := GetPoolPaths(poolPath)
 	dirs := []string{
-		paths.Root,
+		paths.PoolPath,
 		paths.SkillsDir,
+		paths.MetaDir,
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -116,16 +155,22 @@ func EnsureRepoDir(root string) error {
 	return nil
 }
 
-// InitRepo creates a fresh repo with default config.
-func InitRepo(root string) error {
-	if err := EnsureRepoDir(root); err != nil {
+// Deprecated: Use EnsurePoolDir instead.
+func EnsureRepoDir(root string) error {
+	return EnsurePoolDir(root)
+}
+
+// InitPool creates a fresh pool with default config.
+func InitPool(poolPath string) error {
+	if err := EnsurePoolDir(poolPath); err != nil {
 		return err
 	}
 
 	cfg := defaultConfig()
-	cfg.RepoPath = root
+	cfg.PoolPath = poolPath
+	cfg.RepoPath = poolPath
 
-	paths := GetRepoPaths(root)
+	paths := GetPoolPaths(poolPath)
 	if err := SaveConfig(paths.ConfigPath, cfg); err != nil {
 		return fmt.Errorf("save default config: %w", err)
 	}
@@ -158,4 +203,9 @@ func InitRepo(root string) error {
 	}
 
 	return nil
+}
+
+// Deprecated: Use InitPool instead.
+func InitRepo(root string) error {
+	return InitPool(root)
 }

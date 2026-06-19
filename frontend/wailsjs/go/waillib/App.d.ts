@@ -20,9 +20,13 @@ export function ImportToPool(arg1:string):Promise<void>;
 
 export function Install(arg1:string,arg2:waillib.InstallUIOptions):Promise<Array<waillib.InstallUILog>>;
 
+export function InstallMarketSkill(arg1:models.MarketSearchSkill,arg2:Array<string>):Promise<Array<waillib.InstallUILog>>;
+
 export function InstallToAgent(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
 export function InstallToProject(arg1:string,arg2:string,arg3:boolean):Promise<void>;
+
+export function InstallToProjectForAgent(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<void>;
 
 export function ListAgents():Promise<Array<waillib.AgentInfo>>;
 

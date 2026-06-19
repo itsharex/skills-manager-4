@@ -598,44 +598,20 @@ func TestValidateAgentPath_UnknownAgent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSyncAndUnsyncSkill(t *testing.T) {
-	// NOT parallel — modifies real filesystem paths (~/.claude/skills)
-
 	// Create a source skill directory with content
 	sourceDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(sourceDir, "skill.yaml"), []byte("name: test-skill"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Set up a real agent skills directory in a temp area so we don't pollute
-	// the user's actual agent config.
-	realHome, err := os.UserHomeDir()
-	if err != nil {
+	// Use a temp directory as the agent skills dir via override
+	agentSkillsDir := filepath.Join(t.TempDir(), "agent-skills")
+	if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	// We need to sync to a known agent. Create a temporary agent dir in the
-	// real home, then clean it up after the test.
-	agentSkillsDir := filepath.Join(realHome, ".claude", "skills")
 	agentID := "claude-code"
-
-	// Only proceed if the dir doesn't already exist (to avoid clobbering real config)
-	origExists := false
-	if fi, statErr := os.Stat(agentSkillsDir); statErr == nil && fi.IsDir() {
-		origExists = true
-	}
-
-	if !origExists {
-		if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
-			t.Fatalf("creating temp agent skills dir: %v", err)
-		}
-	}
-	t.Cleanup(func() {
-		if !origExists {
-			os.RemoveAll(agentSkillsDir)
-			// Remove parent if empty
-			os.Remove(filepath.Dir(agentSkillsDir))
-		}
-	})
+	SetAgentSkillsDirOverride(agentID, agentSkillsDir)
+	t.Cleanup(func() { SetAgentSkillsDirOverride(agentID, "") })
 
 	// Sync skill to agent
 	result, err := SyncSkillToAgent(sourceDir, agentID, false)
@@ -698,8 +674,6 @@ func TestUnsyncSkillFromAgent_UnknownAgent(t *testing.T) {
 }
 
 func TestSyncSkillsToAgents(t *testing.T) {
-	// NOT parallel — modifies real filesystem paths (~/.cursor/skills)
-
 	// Create source skill dirs
 	skill1Dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(skill1Dir, "skill1.yaml"), []byte("skill1"), 0o644); err != nil {
@@ -710,31 +684,14 @@ func TestSyncSkillsToAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Set up a real agent dir (similar approach to TestSyncAndUnsyncSkill)
-	realHome, err := os.UserHomeDir()
-	if err != nil {
+	// Use a temp directory as the agent skills dir via override
+	agentSkillsDir := filepath.Join(t.TempDir(), "agent-skills")
+	if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	agentSkillsDir := filepath.Join(realHome, ".cursor", "skills")
 	agentID := "cursor"
-
-	origExists := false
-	if fi, statErr := os.Stat(agentSkillsDir); statErr == nil && fi.IsDir() {
-		origExists = true
-	}
-
-	if !origExists {
-		if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
-			t.Fatalf("creating temp agent skills dir: %v", err)
-		}
-	}
-	t.Cleanup(func() {
-		if !origExists {
-			os.RemoveAll(agentSkillsDir)
-			os.Remove(filepath.Dir(agentSkillsDir))
-		}
-	})
+	SetAgentSkillsDirOverride(agentID, agentSkillsDir)
+	t.Cleanup(func() { SetAgentSkillsDirOverride(agentID, "") })
 
 	summary, err := SyncSkillsToAgents(
 		[]string{skill1Dir, skill2Dir},
@@ -772,37 +729,19 @@ func TestSyncSkillsToAgents(t *testing.T) {
 }
 
 func TestSyncSkillToAgent_ForceCopy(t *testing.T) {
-	// NOT parallel — modifies real filesystem paths (~/.windsurf/skills)
-
 	sourceDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(sourceDir, "skill.yaml"), []byte("copy-test"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	realHome, err := os.UserHomeDir()
-	if err != nil {
+	// Use a temp directory as the agent skills dir via override
+	agentSkillsDir := filepath.Join(t.TempDir(), "agent-skills")
+	if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	agentSkillsDir := filepath.Join(realHome, ".windsurf", "skills")
 	agentID := "windsurf"
-
-	origExists := false
-	if fi, statErr := os.Stat(agentSkillsDir); statErr == nil && fi.IsDir() {
-		origExists = true
-	}
-
-	if !origExists {
-		if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
-			t.Fatalf("creating temp agent skills dir: %v", err)
-		}
-	}
-	t.Cleanup(func() {
-		if !origExists {
-			os.RemoveAll(agentSkillsDir)
-			os.Remove(filepath.Dir(agentSkillsDir))
-		}
-	})
+	SetAgentSkillsDirOverride(agentID, agentSkillsDir)
+	t.Cleanup(func() { SetAgentSkillsDirOverride(agentID, "") })
 
 	result, err := SyncSkillToAgent(sourceDir, agentID, true)
 	if err != nil {
@@ -945,11 +884,7 @@ func TestInstaller_Install_NoSync(t *testing.T) {
 		t.Errorf("persisted index Name mismatch: got %q", entry2.Name)
 	}
 
-	// Verify latest symlink was created
-	latestPath := filepath.Join(repo.Paths.SkillsDir, "test-ns", "my-skill@latest")
-	if !IsSymlink(latestPath) {
-		t.Error("latest symlink was not created")
-	}
+	// Note: UpdateLatest is a no-op in flat pool layout, so no latest symlink is created
 }
 
 func TestInstaller_Install_WithNamespaceOverride(t *testing.T) {
@@ -1032,8 +967,6 @@ func TestInstaller_Install_DefaultVersion(t *testing.T) {
 }
 
 func TestInstaller_Install_WithSync(t *testing.T) {
-	t.Parallel()
-
 	repo := storage.NewRepository(t.TempDir())
 	idx, err := storage.NewIndex(filepath.Join(t.TempDir(), "index.json"))
 	if err != nil {
@@ -1056,31 +989,14 @@ func TestInstaller_Install_WithSync(t *testing.T) {
 		Version:   "1.0.0",
 	}
 
-	// Set up a real agent directory for sync testing
-	realHome, err := os.UserHomeDir()
-	if err != nil {
+	// Use a temp directory as the agent skills dir via override
+	agentSkillsDir := filepath.Join(t.TempDir(), "agent-skills")
+	if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	agentSkillsDir := filepath.Join(realHome, ".github-copilot", "skills")
 	agentID := "github-copilot"
-
-	origExists := false
-	if fi, statErr := os.Stat(agentSkillsDir); statErr == nil && fi.IsDir() {
-		origExists = true
-	}
-
-	if !origExists {
-		if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
-			t.Fatalf("creating temp agent skills dir: %v", err)
-		}
-	}
-	t.Cleanup(func() {
-		if !origExists {
-			os.RemoveAll(agentSkillsDir)
-			os.Remove(filepath.Dir(agentSkillsDir))
-		}
-	})
+	SetAgentSkillsDirOverride(agentID, agentSkillsDir)
+	t.Cleanup(func() { SetAgentSkillsDirOverride(agentID, "") })
 
 	inst := NewInstaller(repo, idx, lock)
 	result, err := inst.Install(skill, InstallOptions{
@@ -1110,8 +1026,8 @@ func TestInstaller_Install_WithSync(t *testing.T) {
 		t.Error("expected at least one agent in lock entry")
 	}
 
-	// Verify symlink was created at agent dir
-	linkPath := filepath.Join(agentSkillsDir, "sync-test@1.0.0")
+	// Verify symlink was created at agent dir (flat pool uses skill name, not name@version)
+	linkPath := filepath.Join(agentSkillsDir, "sync-test")
 	if !IsSymlink(linkPath) {
 		// Could be copy mode; check dir exists
 		if _, err := os.Stat(linkPath); os.IsNotExist(err) {
@@ -1120,7 +1036,7 @@ func TestInstaller_Install_WithSync(t *testing.T) {
 	}
 
 	// Cleanup: remove the synced symlink
-	_ = UnsyncSkillFromAgent("sync-test@1.0.0", agentID)
+	_ = UnsyncSkillFromAgent("sync-test", agentID)
 }
 
 func TestInstaller_Uninstall(t *testing.T) {
@@ -1206,8 +1122,6 @@ func TestInstaller_Uninstall_NonExistent(t *testing.T) {
 }
 
 func TestInstaller_CleanupStaleLinks(t *testing.T) {
-	t.Parallel()
-
 	repo := storage.NewRepository(t.TempDir())
 	idx, err := storage.NewIndex(filepath.Join(t.TempDir(), "index.json"))
 	if err != nil {
@@ -1218,34 +1132,17 @@ func TestInstaller_CleanupStaleLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create a lock entry that references a broken symlink
-	realHome, err := os.UserHomeDir()
-	if err != nil {
+	// Use a temp directory as the agent skills dir via override
+	agentSkillsDir := filepath.Join(t.TempDir(), "agent-skills")
+	if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	agentSkillsDir := filepath.Join(realHome, ".claude", "skills")
 	agentID := "claude-code"
+	SetAgentSkillsDirOverride(agentID, agentSkillsDir)
+	t.Cleanup(func() { SetAgentSkillsDirOverride(agentID, "") })
 
-	origExists := false
-	if fi, statErr := os.Stat(agentSkillsDir); statErr == nil && fi.IsDir() {
-		origExists = true
-	}
-
-	if !origExists {
-		if err := os.MkdirAll(agentSkillsDir, 0o755); err != nil {
-			t.Fatalf("creating temp agent skills dir: %v", err)
-		}
-	}
-	t.Cleanup(func() {
-		if !origExists {
-			os.RemoveAll(agentSkillsDir)
-			os.Remove(filepath.Dir(agentSkillsDir))
-		}
-	})
-
-	// Create a broken symlink at the agent skills dir
-	brokenLinkPath := filepath.Join(agentSkillsDir, "stale-skill@1.0.0")
+	// Create a broken symlink at the agent skills dir (flat pool uses skill name, not name@version)
+	brokenLinkPath := filepath.Join(agentSkillsDir, "stale-skill")
 	os.Remove(brokenLinkPath) // clean any leftover from previous runs
 	if err := os.Symlink("/nonexistent/stale-target", brokenLinkPath); err != nil {
 		t.Fatal(err)

@@ -161,6 +161,9 @@ func (m *Manager) pingRegistry() bool {
 	url := fmt.Sprintf("https://api.github.com/repos/%s", m.registry)
 	req, _ := http.NewRequest("HEAD", url, nil)
 	req.Header.Set("User-Agent", "skills-manager")
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "token "+token)
+	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return false
@@ -252,7 +255,7 @@ func (m *Manager) fetchAllSkillsFromGitHub() ([]models.ClawHubSkill, error) {
 	repoURL := fmt.Sprintf("https://api.github.com/repos/%s", m.registry)
 	repoInfo, err := m.httpGetJSON(repoURL)
 	if err != nil {
-		return nil, fmt.Errorf("获取 registry 信息: %w", err)
+		return nil, fmt.Errorf("获取 registry 信息: %w（请在设置中配置 GitHub Token）", err)
 	}
 	defaultBranch, _ := repoInfo["default_branch"].(string)
 	if defaultBranch == "" {
@@ -359,6 +362,9 @@ func (m *Manager) fetchSkillMetadata(owner, slug, branch string) (models.ClawHub
 func (m *Manager) httpGet(url string) (string, error) {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", "skills-manager")
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "token "+token)
+	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return "", err
@@ -578,6 +584,9 @@ func (m *Manager) fetchSkillFromGitHub(owner, slug, dst string) error {
 func (m *Manager) fetchContentsRecursive(apiURL, dstDir string) error {
 	req, _ := http.NewRequest("GET", apiURL, nil)
 	req.Header.Set("User-Agent", "skills-manager")
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "token "+token)
+	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return err
@@ -630,6 +639,9 @@ func (m *Manager) fetchContentsRecursive(apiURL, dstDir string) error {
 func (m *Manager) downloadFile(url, dst string) error {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", "skills-manager")
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "token "+token)
+	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return err

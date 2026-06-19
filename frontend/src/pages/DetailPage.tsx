@@ -1,8 +1,10 @@
-import { ArrowLeft, Trash2, MapPin, ExternalLink, Loader2, FolderOpen } from "lucide-react";
+import { ArrowLeft, Trash2, MapPin, ExternalLink, Loader2, FolderOpen, Info } from "lucide-react";
+import { toast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "../components/ui/dialog";
 import { useI18n } from "../i18n/context";
 import { deleteSkill, openDirectory, getConfig } from "../bridge";
 import type { ListedSkill } from "../types";
@@ -16,9 +18,9 @@ interface Props {
 export default function DetailPage({ skill, onBack }: Props) {
   const { t } = useI18n();
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
   const [openingFolder, setOpeningFolder] = useState<string | null>(null);
   const [poolPath, setPoolPath] = useState("");
+  const [deleteConfirm, setDeleteConfirm] = useState<{ path: string; agentName: string } | null>(null);
 
   useEffect(() => {
     getConfig().then(cfg => {
@@ -42,17 +44,21 @@ export default function DetailPage({ skill, onBack }: Props) {
   const versions = skill.versions ?? [];
 
   const handleDelete = async (path: string, agentName: string) => {
-    if (!confirm(`确认删除 ${agentName} 下的技能 "${skill.name}"？\n路径: ${path}\n此操作不可恢复。`)) return;
     setDeleting(path);
-    setDeleteMsg(null);
     try {
       await deleteSkill(path);
-      setDeleteMsg(`已从 ${agentName} 删除技能 "${skill.name}"`);
+      toast.success(`已从 ${agentName} 删除技能 "${skill?.name}"`);
     } catch (e: any) {
-      setDeleteMsg(`删除失败: ${e.message}`);
+      toast.error(`删除失败: ${e.message}`);
     } finally {
       setDeleting(null);
+      setDeleteConfirm(null);
     }
+  };
+
+  const confirmDelete = () => {
+    if (!deleteConfirm) return;
+    handleDelete(deleteConfirm.path, deleteConfirm.agentName);
   };
 
   const handleOpen = async (path: string) => {
@@ -65,6 +71,8 @@ export default function DetailPage({ skill, onBack }: Props) {
 
   // Pool path
   const poolSkillPath = poolPath && skill.inPool ? `${poolPath}/${skill.name}` : "";
+  // Repo store path (market-installed skills)
+  const storePath = skill.storePath || "";
   // Agent install paths (paths indexed by agent)
   const agentPaths = skill.paths.map((path, i) => ({
     path,
@@ -88,13 +96,28 @@ export default function DetailPage({ skill, onBack }: Props) {
         </div>
       </div>
 
-      {deleteMsg && (
-        <Card>
-          <CardContent className="py-3">
-            <p className={`text-sm ${deleteMsg.includes("失败") ? "text-destructive" : "text-green-600"}`}>{deleteMsg}</p>
-          </CardContent>
-        </Card>
-      )}
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认删除</DialogTitle>
+            <DialogDescription>
+              确认从 {deleteConfirm?.agentName} 删除技能 "{skill?.name}"？
+              <br />
+              <span className="font-mono text-xs">{deleteConfirm?.path}</span>
+              <br />
+              此操作不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)} disabled={!!deleting}>取消</Button>
+            <Button variant="destructive" onClick={confirmDelete} disabled={!!deleting}>
+              {deleting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Trash2 className="h-4 w-4 mr-1" />}
+              确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Tabs defaultValue="overview">
         <TabsList>
@@ -158,6 +181,27 @@ export default function DetailPage({ skill, onBack }: Props) {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
+                {/* Repo store path (market-installed skills) */}
+                {storePath && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
+                      <FolderOpen className="h-3 w-3" />
+                      仓库存储位置
+                    </p>
+                    <div className="border rounded-lg p-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1 flex items-center gap-2">
+                        <MapPin className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                        <Badge variant="outline" className="text-[10px] shrink-0 border-blue-300 text-blue-600">仓库</Badge>
+                        <p className="text-xs font-mono text-muted-foreground truncate" title={storePath}>{storePath}</p>
+                      </div>
+                      <Button variant="outline" size="sm" className="h-7 text-xs shrink-0" onClick={() => handleOpen(storePath)} disabled={openingFolder === storePath}>
+                        {openingFolder === storePath ? <Loader2 className="h-3 w-3 animate-spin" /> : <ExternalLink className="h-3 w-3" />}
+                        打开
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Pool path */}
                 {poolSkillPath && (
                   <div>
@@ -204,7 +248,7 @@ export default function DetailPage({ skill, onBack }: Props) {
                               variant="ghost"
                               size="sm"
                               className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                              onClick={() => handleDelete(path, agentName)}
+                              onClick={() => setDeleteConfirm({ path, agentName })}
                               disabled={deleting === path}
                             >
                               {deleting === path ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
@@ -216,7 +260,7 @@ export default function DetailPage({ skill, onBack }: Props) {
                   </div>
                 )}
 
-                {!poolSkillPath && agentPaths.length === 0 && (
+                {!storePath && !poolSkillPath && agentPaths.length === 0 && (
                   <p className="text-muted-foreground text-sm">无安装位置信息</p>
                 )}
               </div>
@@ -231,7 +275,7 @@ export default function DetailPage({ skill, onBack }: Props) {
             </CardHeader>
             <CardContent>
               {versions.length === 0 ? (
-                <p className="text-muted-foreground text-sm">{t("detail.no_versions")}</p>
+                <p className="text-muted-foreground text-sm flex items-center gap-1.5"><Info className="h-4 w-4" />{t("detail.no_versions")}</p>
               ) : (
                 <div className="border rounded-lg overflow-hidden">
                   <table className="w-full text-sm">

@@ -11,8 +11,9 @@ import CLITipsPage from "./pages/CLITipsPage";
 import type { ListedSkill, AgentInfo, SkillStats } from "./types";
 import { listSkills, listAgents, getStats } from "./bridge";
 import { Button } from "./components/ui/button";
+import { Toaster } from "./components/ui/toaster";
 import { cn } from "./lib/utils";
-import logoImg from "./assets/ask.png";
+import logoImg from "./assets/asklogo.png";
 
 type Page = "dashboard" | "market" | "pool" | "detail" | "settings" | "cli-tips";
 
@@ -27,6 +28,7 @@ export default function App() {
   const [stats, setStats] = useState<SkillStats | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedSkill, setSelectedSkill] = useState<ListedSkill | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const NAV_ITEMS: NavItem[] = [
     { key: "dashboard", label: t("nav.dashboard"), icon: LayoutDashboard },
@@ -37,10 +39,15 @@ export default function App() {
   ];
 
   const loadData = async () => {
-    const [sk, ag, st] = await Promise.all([listSkills(), listAgents(), getStats()]);
-    setSkills(sk);
-    setAgents(ag);
-    setStats(st);
+    setLoading(true);
+    try {
+      const [sk, ag, st] = await Promise.all([listSkills(), listAgents(), getStats()]);
+      setSkills(sk);
+      setAgents(ag);
+      setStats(st);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { loadData(); }, []);
@@ -67,6 +74,7 @@ export default function App() {
   };
 
   return (
+    <>
     <div className="flex h-screen bg-background">
       {/* Sidebar */}
       <aside className={cn("border-r bg-card flex flex-col transition-all duration-200", sidebarOpen ? "w-56" : "w-0 overflow-hidden")}>
@@ -114,15 +122,17 @@ export default function App() {
             </Button>
           </div>
         </header>
-        <main className="flex-1 overflow-auto p-6">
-          {page === "dashboard" && <DashboardPage skills={skills} agents={agents} onNavigate={navigateToDetail} />}
+        <main className="flex-1 overflow-auto p-6 animate-in fade-in-0 duration-200" key={page}>
+          {page === "dashboard" && <DashboardPage skills={skills} agents={agents} onNavigate={navigateToDetail} onNavigatePage={(p) => navigateTo(p as Page)} />}
           {page === "market" && <MarketPage onRefresh={loadData} />}
-          {page === "pool" && <SkillsPoolPage skills={skills} onSelect={navigateToDetail} onRefresh={loadData} />}
+          {page === "pool" && <SkillsPoolPage skills={skills} onSelect={navigateToDetail} onRefresh={loadData} loading={loading} />}
           {page === "detail" && <DetailPage skill={selectedSkill} onBack={navigateBack} />}
           {page === "settings" && <SettingsPage agents={agents} onRefresh={loadData} />}
           {page === "cli-tips" && <CLITipsPage />}
         </main>
       </div>
     </div>
+    <Toaster />
+    </>
   );
 }

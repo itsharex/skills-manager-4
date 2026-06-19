@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,34 +11,36 @@ import (
 	"github.com/skillsmanager/skillsmanager/backend/pkg/models"
 )
 
-// Repository manages the local skill repository.
+// Repository manages the local skill pool.
 type Repository struct {
 	Root  string
-	Paths models.RepoPaths
+	Paths models.PoolPaths
 }
 
-// NewRepository creates a Repository instance backed by the given root.
-func NewRepository(root string) *Repository {
+// NewRepository creates a Repository instance backed by the given pool path.
+func NewRepository(poolPath string) *Repository {
 	return &Repository{
-		Root:  root,
-		Paths: models.RepoPaths{
-			Root:       root,
-			SkillsDir:  filepath.Join(root, "skills"),
-			IndexPath:  filepath.Join(root, "index.json"),
-			LockPath:   filepath.Join(root, "lock.json"),
-			ConfigPath: filepath.Join(root, "config.json"),
+		Root: poolPath,
+		Paths: models.PoolPaths{
+			PoolPath:   poolPath,
+			Root:       poolPath,
+			SkillsDir:  poolPath,
+			MetaDir:    filepath.Join(poolPath, ".meta"),
+			IndexPath:  filepath.Join(poolPath, ".meta", "index.json"),
+			LockPath:   filepath.Join(poolPath, ".meta", "lock.json"),
+			ConfigPath: filepath.Join(poolPath, ".meta", "config.json"),
 		},
 	}
 }
 
-// SkillPath returns Root/skills/{namespace}/{name}@{version}/
+// SkillPath returns Root/{name}/ (flat structure, ignores namespace and version).
 func (r *Repository) SkillPath(namespace, name, version string) string {
-	return filepath.Join(r.Paths.SkillsDir, namespace, fmt.Sprintf("%s@%s", name, version))
+	return filepath.Join(r.Root, name)
 }
 
-// Store copies a resolved skill into the repository.
+// Store copies a resolved skill into the pool.
 func (r *Repository) Store(skill models.ResolvedSkill, namespace, version string) (string, error) {
-	dest := r.SkillPath(namespace, skill.Name, version)
+	dest := r.SkillPath("", skill.Name, "")
 
 	// Create destination directory
 	if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -63,53 +66,25 @@ func (r *Repository) Store(skill models.ResolvedSkill, namespace, version string
 	return dest, nil
 }
 
-// Remove deletes a skill version from the repository.
+// Remove deletes a skill from the pool.
 func (r *Repository) Remove(namespace, name, version string) error {
-	path := r.SkillPath(namespace, name, version)
+	path := r.SkillPath("", name, "")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil // already gone
 	}
 	if err := os.RemoveAll(path); err != nil {
-		return fmt.Errorf("remove skill %s/%s@%s: %w", namespace, name, version, err)
+		return fmt.Errorf("remove skill %s: %w", name, err)
 	}
 	return nil
 }
 
-// UpdateLatest creates/updates a "latest" symlink for the skill version.
-// The symlink is placed at {skillsDir}/{namespace}/{name}@latest pointing to {name}@{version}.
+// UpdateLatest is a no-op in the flat pool layout (no latest symlink needed).
 func (r *Repository) UpdateLatest(namespace, name, version string) error {
-	skillDir := r.Paths.SkillsDir
-	versionDir := r.SkillPath(namespace, name, version)
-	latestPath := filepath.Join(skillDir, namespace, fmt.Sprintf("%s@latest", name))
-
-	// Ensure version dir exists
-	if _, err := os.Stat(versionDir); err != nil {
-		return fmt.Errorf("version directory not found: %w", err)
-	}
-
-	// Ensure the parent namespace dir exists
-	nsDir := filepath.Join(skillDir, namespace)
-	if err := os.MkdirAll(nsDir, 0o755); err != nil {
-		return fmt.Errorf("create namespace directory: %w", err)
-	}
-
-	// Remove existing latest if present
-	if _, err := os.Lstat(latestPath); err == nil {
-		if err := os.Remove(latestPath); err != nil {
-			return fmt.Errorf("remove existing latest symlink: %w", err)
-		}
-	}
-
-	// Create symlink (relative to namespace dir)
-	relTarget := fmt.Sprintf("%s@%s", name, version)
-	if err := os.Symlink(relTarget, latestPath); err != nil {
-		return fmt.Errorf("create latest symlink: %w", err)
-	}
-
+	log.Printf("[WARNING] UpdateLatest is a no-op in flat pool layout; namespace=%s name=%s version=%s", namespace, name, version)
 	return nil
 }
 
-// ListSkills returns all skills stored in the repository.
+// ListSkills returns all skills stored in the pool (flat layout).
 func (r *Repository) ListSkills() ([]string, error) {
 	skillsDir := r.Paths.SkillsDir
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
@@ -117,30 +92,32 @@ func (r *Repository) ListSkills() ([]string, error) {
 	}
 
 	var skills []string
-	err := filepath.WalkDir(skillsDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf("access error at %s: %w", path, err)
-		}
-		if !d.IsDir() {
-			return nil
-		}
-		// A directory containing "@" is a skill version entry (name@version)
-		if strings.Contains(d.Name(), "@") {
-			rel, _ := filepath.Rel(skillsDir, path)
-			skills = append(skills, rel)
-		}
-		return nil
-	})
+	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
-		return nil, fmt.Errorf("walk skills directory: %w", err)
+		return nil, fmt.Errorf("read skills directory: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// Skip .meta directory
+		if entry.Name() == ".meta" {
+			continue
+		}
+		// Check for SKILL.md
+		skillMDPath := filepath.Join(skillsDir, entry.Name(), "SKILL.md")
+		if _, err := os.Stat(skillMDPath); err != nil {
+			continue
+		}
+		skills = append(skills, entry.Name())
 	}
 
 	return skills, nil
 }
 
-// Exists checks if a specific skill version exists in the repository.
+// Exists checks if a specific skill exists in the pool.
 func (r *Repository) Exists(namespace, name, version string) bool {
-	path := r.SkillPath(namespace, name, version)
+	path := r.SkillPath("", name, "")
 	_, err := os.Stat(path)
 	return err == nil
 }
