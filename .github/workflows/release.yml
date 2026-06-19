@@ -32,40 +32,31 @@ jobs:
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
-      - name: Build
+      - name: Build macOS
         run: wails build -platform darwin/${{ matrix.arch }} -ldflags "-s -w"
         env:
           CGO_CFLAGS: "-Wno-deprecated-declarations"
           CGO_LDFLAGS: "-framework UniformTypeIdentifiers"
 
-      - name: Create macOS .app Bundle
+      - name: Find and enhance macOS .app Bundle
         run: |
           APP_NAME="skillsmanager"
-          APP_BUNDLE="build/bin/Skills Manager.app"
           VERSION="${GITHUB_REF_NAME#v}"
 
-          mkdir -p "$APP_BUNDLE/Contents/MacOS"
-          mkdir -p "$APP_BUNDLE/Contents/Resources"
-          cp "build/bin/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
-
-          # Generate .icns from asklogo.png
-          if [ -f "asklogo.png" ]; then
-            ICONSET_DIR="build/bin/icon.iconset"
-            mkdir -p "$ICONSET_DIR"
-            sips -z 16 16     asklogo.png --out "$ICONSET_DIR/icon_16x16.png"     >/dev/null 2>&1
-            sips -z 32 32     asklogo.png --out "$ICONSET_DIR/icon_16x16@2x.png"  >/dev/null 2>&1
-            sips -z 32 32     asklogo.png --out "$ICONSET_DIR/icon_32x32.png"     >/dev/null 2>&1
-            sips -z 64 64     asklogo.png --out "$ICONSET_DIR/icon_32x32@2x.png"  >/dev/null 2>&1
-            sips -z 128 128   asklogo.png --out "$ICONSET_DIR/icon_128x128.png"   >/dev/null 2>&1
-            sips -z 256 256   asklogo.png --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null 2>&1
-            sips -z 256 256   asklogo.png --out "$ICONSET_DIR/icon_256x256.png"   >/dev/null 2>&1
-            sips -z 512 512   asklogo.png --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null 2>&1
-            sips -z 512 512   asklogo.png --out "$ICONSET_DIR/icon_512x512.png"   >/dev/null 2>&1
-            sips -z 1024 1024 asklogo.png --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null 2>&1
-            iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/iconfile.icns"
-            rm -rf "$ICONSET_DIR"
+          # wails build creates the .app bundle in build/bin/
+          APP_BUNDLE=$(find build/bin -name "*.app" -type d 2>/dev/null | head -1)
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "ERROR: No .app bundle found in build/bin/"
+            ls -la build/bin/
+            exit 1
           fi
+          echo "Found .app bundle: $APP_BUNDLE"
 
+          # Find the executable inside the bundle
+          EXECUTABLE=$(find "$APP_BUNDLE/Contents/MacOS" -type f -executable 2>/dev/null | head -1)
+          echo "Executable: $EXECUTABLE"
+
+          # Overwrite Info.plist with correct version
           cat > "$APP_BUNDLE/Contents/Info.plist" << PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -97,15 +88,33 @@ jobs:
           </plist>
           PLIST
 
-          codesign --force --sign - "$APP_BUNDLE" || true
+          # Generate .icns from asklogo.png if present
+          if [ -f "asklogo.png" ]; then
+            ICONSET_DIR=$(mktemp -d)
+            sips -z 16 16     asklogo.png --out "$ICONSET_DIR/icon_16x16.png"     >/dev/null 2>&1
+            sips -z 32 32     asklogo.png --out "$ICONSET_DIR/icon_16x16@2x.png"  >/dev/null 2>&1
+            sips -z 32 32     asklogo.png --out "$ICONSET_DIR/icon_32x32.png"     >/dev/null 2>&1
+            sips -z 64 64     asklogo.png --out "$ICONSET_DIR/icon_32x32@2x.png"  >/dev/null 2>&1
+            sips -z 128 128   asklogo.png --out "$ICONSET_DIR/icon_128x128.png"   >/dev/null 2>&1
+            sips -z 256 256   asklogo.png --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null 2>&1
+            sips -z 256 256   asklogo.png --out "$ICONSET_DIR/icon_256x256.png"   >/dev/null 2>&1
+            sips -z 512 512   asklogo.png --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null 2>&1
+            sips -z 512 512   asklogo.png --out "$ICONSET_DIR/icon_512x512.png"   >/dev/null 2>&1
+            sips -z 1024 1024 asklogo.png --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null 2>&1
+            iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/iconfile.icns"
+            rm -rf "$ICONSET_DIR"
+            echo "Icon generated"
+          fi
 
-          # Remove raw binary, keep only .app
-          rm -f "build/bin/$APP_NAME"
+          # Ad-hoc sign the bundle
+          codesign --force --sign - "$APP_BUNDLE" || true
+          echo "Code signing done"
 
       - name: Package macOS .app
         run: |
+          APP_BUNDLE=$(find build/bin -name "*.app" -type d 2>/dev/null | head -1)
           cd build/bin
-          zip -r "../../Skills-Manager-${{ matrix.suffix }}.zip" "Skills Manager.app"
+          zip -r "../../Skills-Manager-${{ matrix.suffix }}.zip" "$(basename "$APP_BUNDLE")"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
